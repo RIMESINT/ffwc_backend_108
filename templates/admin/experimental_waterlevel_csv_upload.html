@@ -1,0 +1,502 @@
+{% extends 'admin/base.html' %}
+{% load static i18n %}
+
+{% block extrahead %}
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+
+    <!-- jQuery -->
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script>
+        if (typeof jQuery === 'undefined') {
+            console.error("jQuery failed to load from CDN");
+        } else {
+            console.log("jQuery loaded successfully");
+        }
+    </script>
+
+    <!-- Bootstrap 5 JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js" integrity="sha384-YvpcrYf0tY3lHB60NNkmXc5s9fDVZLESaAA55NDzOxhy9GkcIdslK1eN7N6jIeHz" crossorigin="anonymous"></script>
+
+    <!-- Celery Progress -->
+    <script src="{% static 'celery_progress/celery_progress.js' %}"></script>
+    <script src="{% static 'celery_progress/main.js' %}"></script>
+{% endblock %}
+
+{% block content %}
+<style>
+    body {
+        font-family: 'Poppins', sans-serif;
+        background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+        min-height: 100vh;
+        color: #333;
+    }
+    .container {
+        width: 100%;
+        padding: 0 1rem;
+        margin: 2rem auto;
+    }
+    .card {
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        background: #ffffff;
+        overflow: hidden;
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    }
+    .card-header {
+        background: #1e88e5;
+        color: white;
+        border-radius: 12px 12px 0 0;
+        padding: 1.5rem;
+        font-weight: 500;
+    }
+    .card-body {
+        padding: 2rem;
+    }
+    h1 {
+        font-size: 2rem;
+        font-weight: 600;
+        color: #1e88e5;
+        margin-bottom: 1rem;
+    }
+    .back-link {
+        color: #1565c0;
+        text-decoration: none;
+        font-weight: 500;
+        transition: color 0.2s;
+    }
+    .back-link:hover {
+        color: #0d47a1;
+        text-decoration: underline;
+    }
+    .file-upload-wrapper {
+        position: relative;
+        border: 2px dashed #90caf9;
+        border-radius: 8px;
+        padding: 2rem;
+        text-align: center;
+        background: #f8fafc;
+        transition: border-color 0.3s, background 0.3s;
+    }
+    .file-upload-wrapper.dragover {
+        border-color: #1e88e5;
+        background: #e3f2fd;
+    }
+    .file-upload-wrapper input[type="file"] {
+        display: none;
+    }
+    .file-upload-label {
+        cursor: pointer;
+        color: #1e88e5;
+        font-weight: 500;
+        transition: color 0.2s;
+    }
+    .file-upload-label:hover {
+        color: #1565c0;
+    }
+    .btn-primary {
+        background-color: #1e88e5;
+        border: none;
+        padding: 0.75rem 1.5rem;
+        font-weight: 500;
+        border-radius: 8px;
+        transition: background-color 0.3s, transform 0.2s;
+    }
+    .btn-primary:hover {
+        background-color: #1565c0;
+        transform: translateY(-2px);
+    }
+    .progress-wrapper {
+        height: 24px;
+        background-color: #e3f2fd;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
+    }
+    .progress-bar {
+        height: 100%;
+        background: linear-gradient(90deg, #1e88e5, #4fc3f7);
+        transition: width 0.5s ease-in-out;
+    }
+    .task-progress .progress-bar {
+        background: linear-gradient(90deg, #28a745, #5cd85c);
+    }
+    .task-progress .progress-bar.error {
+        background: linear-gradient(90deg, #dc3545, #e4606d);
+    }
+    #progress-bar-message, .task-progress p {
+        font-weight: 500;
+        color: #333;
+        margin-bottom: 0.5rem;
+    }
+    #task-logs {
+        max-height: 300px;
+        overflow-y: auto;
+        background: #f8fafc;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 1rem;
+        box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+    }
+    #task-logs h3 {
+        font-size: 1.25rem;
+        font-weight: 500;
+        color: #1e88e5;
+        margin-bottom: 0.75rem;
+    }
+    #log-list {
+        list-style: none;
+        padding: 0;
+        font-size: 0.9rem;
+        color: #555;
+    }
+    #log-list li {
+        padding: 0.5rem 0;
+        border-bottom: 1px solid #e0e0e0;
+    }
+    #log-list li:last-child {
+        border-bottom: none;
+    }
+    #log-list li.debug {
+        color: #888;
+        font-size: 0.85rem;
+        font-style: italic;
+    }
+    #log-list li.completion {
+        color: #333;
+        font-weight: 500;
+    }
+    #selected-files {
+        margin-top: 1rem;
+        color: #1e88e5;
+        font-size: 0.9rem;
+        font-weight: 500;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+    #selected-files.visible {
+        opacity: 1;
+    }
+    #error-message {
+        margin-top: 1rem;
+        color: #dc3545;
+        font-size: 0.9rem;
+        font-weight: 500;
+        opacity: 0;
+        transition: opacity 0.3s ease;
+    }
+    #error-message.visible {
+        opacity: 1;
+    }
+    .not-visible {
+        display: none;
+    }
+    @media (max-width: 576px) {
+        .container {
+            padding: 0 0.5rem;
+        }
+        h1 {
+            font-size: 1.5rem;
+        }
+        .card-body {
+            padding: 1.5rem;
+        }
+        .file-upload-wrapper {
+            padding: 1.5rem;
+        }
+    }
+</style>
+
+<div class="container">
+    <h1>{% translate "Import Forecast CSVs for Water Level Forecasts (Experimental)" %}</h1>
+    <p><a href="{% url 'admin:data_load_waterlevelforecastsexperimentals_changelist' %}" class="back-link">{% translate "Back to Water Level Forecasts (Experimental)" %}</a></p>
+
+    {% if messages %}
+    <ul class="messagelist">
+        {% for message in messages %}
+        <li{% if message.tags %} class="{{ message.tags }}"{% endif %}>{{ message }}</li>
+        {% endfor %}
+    </ul>
+    {% endif %}
+
+    <div class="card">
+        <div class="card-header">
+            {% translate "Upload Forecast CSV Files" %}
+        </div>
+        <div class="card-body">
+            <form id="upload-form" action="{% url 'admin:experimental-forecast-import-csv' %}" method="POST" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="file-upload-wrapper" id="file-upload-wrapper">
+                    <label for="id_forecast_csv_file" class="file-upload-label">
+                        {% translate "Drag and drop your CSV files here or click to select (multiple files allowed)" %}
+                    </label>
+                    <input type="file" id="id_forecast_csv_file" name="forecast_csv_file" accept=".csv" multiple>
+                    <p id="selected-files" class="not-visible">{% translate "Selected files: " %}<span id="file-names"></span></p>
+                    <p id="error-message" class="not-visible">{% translate "Please select at least one CSV file to upload." %}</p>
+                </div>
+                <div class="text-center mt-3">
+                    <button type="submit" class="btn btn-primary" id="submit-button">
+                        {% translate "Upload Forecast CSVs" %}
+                    </button>
+                </div>
+            </form>
+
+            <div id="progress-box" class="not-visible mt-3">
+                <p id="upload-message">{% translate "Uploading file(s)..." %}</p>
+                <div class="progress-wrapper">
+                    <div id="upload-progress-bar" class="progress-bar" style="width: 0%;"></div>
+                </div>
+            </div>
+
+            <div id="task-progress" class="mt-3"></div>
+
+            <div id="task-logs" class="not-visible">
+                <h3>{% translate "Task Logs" %}</h3>
+                <ul id="log-list"></ul>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    console.log("Script block started at:", new Date().toISOString());
+    try {
+        const celeryProgressUrl = "{% url 'data_load:celery_progress:task_status' task_id='TASK_ID' %}".replace('TASK_ID/', '');
+        console.log('Celery Progress URL:', celeryProgressUrl);
+
+        document.addEventListener("DOMContentLoaded", function () {
+            console.log("DOMContentLoaded event fired");
+            const uploadForm = document.getElementById('upload-form');
+            const progressBox = document.getElementById('progress-box');
+            const uploadProgressBar = document.getElementById('upload-progress-bar');
+            const taskProgress = document.getElementById('task-progress');
+            const taskLogs = document.getElementById('task-logs');
+            const uploadMessage = document.getElementById('upload-message');
+            const fileInput = document.getElementById('id_forecast_csv_file');
+            const fileUploadWrapper = document.getElementById('file-upload-wrapper');
+            const selectedFiles = document.getElementById('selected-files');
+            const fileNamesSpan = document.getElementById('file-names');
+            const errorMessage = document.getElementById('error-message');
+            const csrfToken = document.getElementsByName('csrfmiddlewaretoken')[0].value;
+            const displayedMessages = new Set();
+
+            function updateFileNames(files) {
+                if (files.length > 0) {
+                    fileNamesSpan.innerText = Array.from(files).map(file => file.name).join(', ');
+                    selectedFiles.classList.remove('not-visible');
+                    selectedFiles.classList.add('visible');
+                    errorMessage.classList.add('not-visible');
+                    errorMessage.classList.remove('visible');
+                } else {
+                    fileNamesSpan.innerText = '';
+                    selectedFiles.classList.add('not-visible');
+                    selectedFiles.classList.remove('visible');
+                }
+            }
+
+            function showErrorMessage(message) {
+                errorMessage.innerText = message;
+                errorMessage.classList.remove('not-visible');
+                errorMessage.classList.add('visible');
+                setTimeout(() => {
+                    errorMessage.classList.add('not-visible');
+                    errorMessage.classList.remove('visible');
+                }, 5000);
+            }
+
+            fileInput.addEventListener('change', () => updateFileNames(fileInput.files));
+            fileUploadWrapper.addEventListener('dragover', (e) => { e.preventDefault(); fileUploadWrapper.classList.add('dragover'); });
+            fileUploadWrapper.addEventListener('dragleave', () => fileUploadWrapper.classList.remove('dragover'));
+            fileUploadWrapper.addEventListener('drop', (e) => {
+                e.preventDefault();
+                fileUploadWrapper.classList.remove('dragover');
+                const files = e.dataTransfer.files;
+                const validFiles = Array.from(files).filter(file => file.type === 'text/csv');
+                if (validFiles.length === files.length && files.length > 0) {
+                    fileInput.files = files;
+                    updateFileNames(files);
+                } else {
+                    showErrorMessage("{% translate 'Please drop valid CSV files only.' %}");
+                }
+            });
+
+            uploadForm.addEventListener('submit', function (e) {
+                e.preventDefault();
+                console.log("Form submitted");
+                const files = fileInput.files;
+                if (files.length === 0) {
+                    showErrorMessage("{% translate 'Please select at least one CSV file to upload.' %}");
+                    return;
+                }
+
+                progressBox.classList.remove('not-visible');
+                taskLogs.classList.remove('not-visible');
+                taskProgress.innerHTML = '';
+                displayedMessages.clear();
+                updateFileNames([]);
+                uploadProgressBar.style.width = '0%';
+                uploadMessage.innerText = `{% translate "Uploading ${files.length} file(s)..." %}`;
+
+                const totalFiles = files.length;
+                let totalBytes = 0, uploadedBytes = 0;
+                for (let file of files) totalBytes += file.size;
+
+                const formData = new FormData();
+                formData.append('csrfmiddlewaretoken', csrfToken);
+                for (let file of files) {
+                    formData.append('forecast_csv_file', file);
+                    console.log(`Appending file: ${file.name}, size: ${file.size}`);
+                }
+
+                $.ajax({
+                    type: 'POST', url: uploadForm.action, data: formData, processData: false, contentType: false,
+                    xhr: function () {
+                        const xhr = new XMLHttpRequest();
+                        xhr.upload.addEventListener('progress', function (e) {
+                            if (e.lengthComputable) {
+                                uploadedBytes = e.loaded;
+                                const percent = (uploadedBytes / totalBytes) * 100;
+                                uploadProgressBar.style.width = `${percent.toFixed(1)}%`;
+                                uploadProgressBar.innerText = `${percent.toFixed(1)}%`;
+                            }
+                        });
+                        return xhr;
+                    },
+                    success: function (response) {
+                        console.log('AJAX response:', response);
+                        uploadMessage.innerText = `{% translate "Uploaded ${totalFiles} file(s)" %}`;
+                        uploadProgressBar.style.width = '100%';
+                        uploadProgressBar.innerText = '100%';
+
+                        if (response.error) {
+                            taskProgress.innerHTML = `<p class="text-danger">{% translate "Error: " %}${response.error}</p>`;
+                            const logItem = document.createElement('li');
+                            logItem.innerText = `[${new Date().toLocaleString()}] {% translate "Error: " %}${response.error}`;
+                            logItem.classList.add('completion');
+                            document.getElementById('log-list').appendChild(logItem);
+                            taskLogs.scrollTop = taskLogs.scrollHeight;
+                            return;
+                        }
+
+                        if (response.task_ids && response.file_names) {
+                            response.task_ids.forEach(function (taskId, idx) {
+                                const fileName = response.file_names[idx] || `File ${idx + 1}`;
+                                const progressDiv = document.createElement('div');
+                                progressDiv.id = `progress-${taskId}`;
+                                progressDiv.classList.add('task-progress', 'mt-3');
+                                progressDiv.innerHTML = `
+                                    <p>{% translate "Processing ${fileName} (Task ${idx + 1} of ${totalFiles})" %}</p>
+                                    <div id="progress-bar-message-${taskId}">{% translate "Waiting for processing..." %}</div>
+                                    <div class="progress-wrapper">
+                                        <div id="progress-bar-${taskId}" class="progress-bar" style="width: 0%;"></div>
+                                    </div>
+                                `;
+                                taskProgress.appendChild(progressDiv);
+
+                                const progressUrl = `${celeryProgressUrl}${taskId}/`;
+                                console.log(`Polling progress URL for task ${taskId}: ${progressUrl}`);
+                                if (typeof CeleryProgressBar !== 'undefined') {
+                                    CeleryProgressBar.initProgressBar(progressUrl, {
+                                        progressBarId: `progress-bar-${taskId}`,
+                                        progressBarMessageId: `progress-bar-message-${taskId}`,
+                                        pollInterval: 5000,
+                                        onProgress: function (progressBar, progress, progressData) {
+                                            console.log('Progress data:', progressData);
+                                            const progressValue = progressData && progressData.percent !== undefined ? progressData.percent : 0;
+                                            progressBar.style.width = `${progressValue}%`;
+                                            progressBar.innerText = `${progressValue.toFixed(1)}%`;
+                                            document.getElementById(`progress-bar-message-${taskId}`).innerText = `{% translate "Processing..." %} ${progressValue.toFixed(1)}%`;
+                                            if (progressData && progressData.description) {
+                                                const logList = document.getElementById('log-list');
+                                                const cleanDescription = progressData.description.replace(/\[ID=[^\]]+\]/, '').trim();
+                                                const message = `[${new Date().toLocaleString()}] ${cleanDescription}`;
+                                                if (!displayedMessages.has(cleanDescription)) {
+                                                    displayedMessages.add(cleanDescription);
+                                                    const logItem = document.createElement('li');
+                                                    logItem.innerText = message;
+                                                    if (cleanDescription.includes('completed') || cleanDescription.includes('failed')) logItem.classList.add('completion');
+                                                    else logItem.classList.add('debug');
+                                                    logList.appendChild(logItem);
+                                                    taskLogs.scrollTop = taskLogs.scrollHeight;
+                                                }
+                                            }
+                                        },
+                                        onSuccess: function (progressBar, progress, progressData) {
+                                            console.log('Progress success:', progressData);
+                                            progressBar.style.width = '100%';
+                                            progressBar.innerText = '100%';
+                                            document.getElementById(`progress-bar-message-${taskId}`).innerText = `{% translate "${fileName} processing completed successfully!" %}`;
+                                            const logList = document.getElementById('log-list');
+                                            const message = `[${new Date().toLocaleString()}] {% translate "${fileName} processing completed successfully!" %}`;
+                                            if (!displayedMessages.has(message)) {
+                                                displayedMessages.add(message);
+                                                const logItem = document.createElement('li');
+                                                logItem.innerText = message;
+                                                logItem.classList.add('completion');
+                                                logList.appendChild(logItem);
+                                                taskLogs.scrollTop = taskLogs.scrollHeight;
+                                            }
+                                        },
+                                        onError: function (progressBar, progress, progressData) {
+                                            console.log('Progress error:', progressData);
+                                            progressBar.classList.add('error');
+                                            progressBar.style.width = '100%';
+                                            progressBar.innerText = 'Error';
+                                            document.getElementById(`progress-bar-message-${taskId}`).innerText = `{% translate "Error processing ${fileName}" %}`;
+                                            const logList = document.getElementById('log-list');
+                                            const message = `[${new Date().toLocaleString()}] {% translate "Error processing ${fileName}: " %}${progressData.result || '{% translate "Unknown error" %}'}`;
+                                            if (!displayedMessages.has(message)) {
+                                                displayedMessages.add(message);
+                                                const logItem = document.createElement('li');
+                                                logItem.innerText = message;
+                                                logItem.classList.add('completion');
+                                                logList.appendChild(logItem);
+                                                taskLogs.scrollTop = taskLogs.scrollHeight;
+                                            }
+                                        }
+                                    });
+                                } else {
+                                    console.error("CeleryProgressBar is not defined");
+                                    const logItem = document.createElement('li');
+                                    logItem.innerText = `[${new Date().toLocaleString()}] {% translate "Error: Celery progress tracking unavailable." %}`;
+                                    logItem.classList.add('completion');
+                                    document.getElementById('log-list').appendChild(logItem);
+                                    taskLogs.scrollTop = taskLogs.scrollHeight;
+                                }
+                            });
+                        } else {
+                            console.error('Missing task_ids or file_names:', response);
+                            const logItem = document.createElement('li');
+                            logItem.innerText = `[${new Date().toLocaleString()}] {% translate "Error: Server response missing task IDs or file names." %}`;
+                            logItem.classList.add('completion');
+                            document.getElementById('log-list').appendChild(logItem);
+                            taskLogs.scrollTop = taskLogs.scrollHeight;
+                        }
+                    },
+                    error: function (xhr, status, error) {
+                        console.error('AJAX error:', status, error, xhr.responseText);
+                        uploadMessage.innerText = '{% translate "Error uploading file(s)" %}';
+                        const logItem = document.createElement('li');
+                        logItem.innerText = `[${new Date().toLocaleString()}] {% translate "Error uploading files: " %}${error} - ${xhr.responseText}`;
+                        logItem.classList.add('completion');
+                        document.getElementById('log-list').appendChild(logItem);
+                        taskLogs.scrollTop = taskLogs.scrollHeight;
+                    }
+                });
+            });
+        });
+    } catch (e) {
+        console.error("JavaScript error:", e);
+    }
+</script>
+
+
+{% endblock %}

@@ -1,0 +1,31 @@
+Question: sudo chown -R sajib:sajib /var/www/prod/SHAIF/ffwc_flash_flood_guidence/forecast/bmd_wrf/
+I want to give owner ship of this directory for root and sajib both
+
+
+Answer:
+In Linux, you can't assign ownership of a file or directory to more than one user at 
+the same time. However, you can assign ownership to a user (e.g., root or sajib) 
+and assign group ownership to another group that both users belong to. This way, 
+both root and sajib can have access to the directory through group permissions.
+
+Step 1: Create a Group:
+    $ sudo groupadd root_sajib_group
+
+Step 2: Add Users to the Group:
+    $ sudo usermod -aG root_sajib_group sajib
+    $ sudo usermod -aG root_sajib_group root
+
+Step 3: Change Group Ownership of the Directory:
+    $ sudo chown -R root:root_sajib_group /var/www/prod/SHAIF/ffwc_flash_flood_guidence/forecast/bmd_wrf/
+
+Step 4: Set Directory Permissions
+    $ sudo chmod -R 770 /var/www/prod/SHAIF/ffwc_flash_flood_guidence/forecast/bmd_wrf/
+
+Step 5: Verify the Setup:
+    $ ls -ld /var/www/prod/SHAIF/ffwc_flash_flood_guidence/forecast/bmd_wrf/
+
+
+
+
+
+

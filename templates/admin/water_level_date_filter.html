@@ -1,0 +1,27 @@
+{% load i18n %}
+<div class="date-filter">
+    <h3>{% trans 'By Observation Date' %}</h3>
+    <ul>
+        {% for choice in spec.choices %}
+            <li class="{% if choice.selected %}selected{% endif %}">
+                <a href="{{ choice.query_string|safe }}">{{ choice.display }}</a>
+            </li>
+        {% endfor %}
+    </ul>
+
+    <h3>{% trans 'Custom Range' %}</h3>
+    <form method="get">
+        {% for hidden in spec.form.hidden_fields %}
+            {{ hidden }}
+        {% endfor %}
+        <div class="custom-range-form">
+            {{ spec.form.as_p }}
+        </div>
+        <input type="submit" value="{% trans 'Filter' %}" class="btn">
+        {% for key, value in cl.get_query_string.items %}
+            {% if key != 'start_date' and key != 'end_date' %}
+                <input type="hidden" name="{{ key }}" value="{{ value }}">
+            {% endif %}
+        {% endfor %}
+    </form>
+</div>

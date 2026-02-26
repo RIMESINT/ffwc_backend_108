@@ -1,0 +1,45 @@
+######################################### 
+2000  cd /adss/bhutan_adss/rimes_sesame_backend/
+2001  ls
+2002  cd media/assets/
+2003  ll
+2004  cd bulletin/
+2005  ls
+2006  cd pdf_archive/
+2007  ll
+2008  mkdir test
+2009  ll
+2010  pip3 install requests
+2011  ll /usr/local/lib/python3.10/dist-packages/
+2012  sudo pip3 install requests
+2013  cd
+2014  ls
+2015  cd scripts/
+2016  ll
+2017  cd
+2018  cd /etc/systemd/system/
+2019  ls
+2020  vim sesame-api_bhutan.service 
+2021  ls
+2022  cd 
+2023  ls
+2024  cd adss_web/
+2025  ls
+2026  cd /adss/bhutan_adss/
+2027  cd rimes_sesame_backend/
+2028  ls
+2029  ll
+2030  cd ../
+2031  sudo vim /etc/systemd/system/sesame-api_bhutan.service 
+2032  sudo systemctl daemon-reload 
+2033  groups 
+2034  sudo vim /etc/systemd/system/sesame-api_bhutan.service 
+2035  ll /adss/bhutan_adss/rimes_sesame_backend/
+2036  sudo usermod -aG sysadmin users
+2037  sudo usermod -aG users sysadmin
+2080  sudo tail -n 50 /var/log/nginx/error.log
+
+########################################
+### User permission check
+########################################
+2006  sudo -lU sysadmin 

@@ -1,0 +1,16 @@
+# path for nginx service create:
+cd /etc/nginx/sites-available/
+
+# activate nginx conf file = ffwc_shaif_ng:
+sudo ln -s /etc/nginx/sites-available/ffwc_shaif_ng /etc/nginx/sites-enabled/
+
+# Check Configuration Syntax:
+sudo nginx -t
+
+# Reload or Restart Nginx:
+sudo systemctl reload nginx
+sudo systemctl restart nginx
+
+
+
+

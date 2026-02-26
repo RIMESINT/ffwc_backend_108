@@ -1,0 +1,144 @@
+#######################################################
+### INSTALL MySQL
+#######################################################
+
+brew install mysql
+brew update
+brew upgrade
+
+#######################################################
+### MySQL service status check
+#######################################################
+brew services list
+mysql.server status
+
+# restart service
+brew services restart mysql
+or
+sudo /usr/local/mysql/support-files/mysql.server restart
+
+# start or enable service
+brew services start mysql
+or 
+sudo /usr/local/mysql/support-files/mysql.server start
+
+
+#######################################################
+### create database user and alter password in POSTGRES
+#######################################################
+
+# Login
+mysql -u root -p
+then provide the password of db user 
+
+# Delete DATABASES
+Command: DROP DATABASE database_name;
+Example: DROP DATABASE c7ffwcdb;
+
+CREATE DATABASE ffwc_new;
+CREATE DATABASE ffwc; 
+CREATE DATABASE ffwc_shaif_v1; 
+CREATE DATABASE c7ffwcdb; 
+
+SHOW DATABASES;
+
+CREATE USER 'ffwc'@'localhost' IDENTIFIED BY 'password@1234';
+GRANT ALL PRIVILEGES ON ffwc_new.* TO 'ffwc'@'localhost';
+GRANT ALL PRIVILEGES ON ffwc.* TO 'ffwc'@'localhost';
+GRANT ALL PRIVILEGES ON ffwc_shaif_v1.* TO 'ffwc'@'localhost';
+FLUSH PRIVILEGES;
+
+exit;
+
+
+######################################################################################################################
+######################################################################################################################
+### will write these command later
+######################################################################################################################
+######################################################################################################################
+GRANT ALL PRIVILEGES ON DATABASE ffwc_shaif_v1 TO ffwc;
+ALTER ROLE ffwc WITH SUPERUSER;        # make a user to superuser
+
+
+#######################################################
+### VIEW MYSQL TABLE and Users
+#######################################################
+
+SELECT User, Host FROM mysql.user;
+
+
+#######################################################
+### DUMP MySQL DATABASE
+#######################################################
+# for single database:
+command: mysqldump -u [username] -p [database_name] > [dump_file.sql]
+example: mysqldump -u ffwc -p ffwc_shaif_v1 > ffwc_shaif_v1.sql
+example: mysqldump -u root -p ffwc_shaif_v1 > ffwc_shaif_v1.sql
+
+# for all database backup:
+command: mysqldump -u root -p --all-databases > all_databases_backup.sql
+example: mysqldump -u ffwc -p --all-databases > all_databases_backup.sql
+example: mysqldump -u root -p --all-databases > all_databases_backup.sql
+
+# for only DB structure backup: [Meaning: -d or --no-data skips the data rows.]
+command: mysqldump -u root -p -d ffwc_shaif_v1 > ffwc_shaif_v1_structure.sql
+example: mysqldump -u ffwc -p -d ffwc_shaif_v1 > ffwc_shaif_v1_structure.sql
+example: mysqldump -u root -p -d ffwc_shaif_v1 > ffwc_shaif_v1_structure.sql
+
+
+# for only single table dump
+command: mysqldump -u root -p my_database my_table > my_table_dump.sql
+command: mysqldump -u root -p ffwc_shaif_v1 app_bulletin_agrometbulletin > app_bulletin_agrometbulletin.sql
+
+
+#######################################################
+### RESTORE MySQL DATABASE
+#######################################################
+mysql -u root -p -e "CREATE DATABASE ffwc_shaif_v1;"
+mysql -u root -p ffwc_shaif_v1 < ffwc_shaif_v1.sql
+
+
+##################################################################
+### SHOW tables of an existing database
+################################################################## 
+1. Login to MySQL: mysql -u ffwc -p
+2. Select the Database: USE ffwc_shaif_v1;
+3. SHOW TABLES;
+4. EXIT;
+
+##################################################################
+##################################################################
+### Empty an existing database
+##################################################################
+##################################################################
+1. Login to MySQL: mysql -u ffwc -p
+2. Select the Database: USE ffwc_shaif_v1;
+3. Generate and Execute Drop Table Commands: 
+SET foreign_key_checks = 0;
+SET GROUP_CONCAT_MAX_LEN=32768;
+SET @tables = NULL;
+SELECT GROUP_CONCAT('`', table_name, '`') INTO @tables
+  FROM information_schema.tables 
+  WHERE table_schema = (SELECT DATABASE());
+SELECT IFNULL(@tables,'dummy') INTO @tables;
+SET @tables = CONCAT('DROP TABLE IF EXISTS ', @tables);
+PREPARE stmt FROM @tables;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+SET foreign_key_checks = 1;
+
+4. Exit MySQL: EXIT;
+
+
+#########################################################
+#########################################################
+### RE INSTALL MYSQL
+#########################################################
+#########################################################
+sudo apt-get remove --purge mysql-server mysql-client mysql-common
+sudo apt-get autoremove
+sudo apt-get autoclean
+sudo apt-get install mysql-server
+
+
+

@@ -1,0 +1,23 @@
+# path for nginx service create:
+cd /etc/systemd/system/
+
+# Reload systemd:
+sudo systemctl daemon-reload
+
+# Start the Service:
+sudo systemctl start ffwc_shaif_api
+
+# Enable the Service:
+sudo systemctl enable ffwc_shaif_api
+
+# Stop the Service:
+sudo systemctl stop ffwc_shaif_api
+
+# Disable the Service:
+sudo systemctl disable ffwc_shaif_api
+
+
+
+
+
+

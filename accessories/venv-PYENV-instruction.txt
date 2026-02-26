@@ -1,0 +1,36 @@
+# basic document
+url: https://towardsdatascience.com/managing-virtual-environment-with-pyenv-ae6f3fb835f8?gi=f2bbb0623476
+
+#####################################################################
+# pyenv default path in ffwc server
+#####################################################################
+cd /home/sajib/.pyenv/versions
+
+# install virtual environment
+sudo apt install python3.10-venv
+
+# list of python environment
+pyenv install --list
+
+# install a specific verision of python inside pyenv
+pyenv install 3.9.5
+
+# create virtual environment
+pyenv virtualenv 3.9.5 env_ffwc_395
+
+# activate virtual environment
+pyenv activate env_ffwc_395
+
+# deactivate virtual environment
+pyenv deactivate
+
+# check pyenv verision
+pyenv versions
+
+# cd to specif directory and set this directory local=default for environment
+cd ~/ffwc_flash_flood_guidence
+pyenv local env_ffwc_395
+
+# install requirement.txt
+python3 -m pip install -r requirements.txt
+

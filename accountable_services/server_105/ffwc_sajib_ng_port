@@ -1,0 +1,46 @@
+server {
+    server_name fass.bdservers.site;
+
+    # Increase the max allowed file size to 100MB
+    client_max_body_size 100M;
+
+    # Increase timeout limits
+    proxy_read_timeout 600s;        # Increase the time Nginx waits for a response from Gunicorn
+    client_body_timeout 600s;       # Increase the time Nginx waits for the body from client
+    send_timeout 600s; 
+
+    access_log /var/log/nginx/ffwc_sajib_api_port_access.log;
+    error_log /var/log/nginx/ffwc_sajib_api_port_error.log;
+
+    location / {
+        include proxy_params;
+        proxy_pass http://127.0.0.1:8008/;
+    }
+
+    location /static {
+        alias /var/www/prod/ffwc_108_deployed_backup/ffwc_django_project/static;
+    }
+
+    location /media {
+        alias /var/www/prod/ffwc_108_deployed_backup/ffwc_django_project/assets;
+    }
+
+    listen 443 ssl; # managed by Certbot
+    
+
+
+    ssl_certificate /etc/letsencrypt/live/fass.bdservers.site/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/fass.bdservers.site/privkey.pem; # managed by Certbot
+}
+server {
+    if ($host = fass.bdservers.site) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    listen 80;
+    server_name fass.bdservers.site;
+    return 404; # managed by Certbot
+
+
+}

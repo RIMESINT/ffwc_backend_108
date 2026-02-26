@@ -1,0 +1,383 @@
+{% extends 'admin/base.html' %} {# Use base.html if admin/base_site.html causes issues with your custom CSS/JS imports #}
+{% block content %}
+{% load static i18n %}
+
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600&display=swap" rel="stylesheet">
+
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" integrity="sha384-QWTKZyjpPEjISv5WaRU9OFeRpok6YctnYmDr5pNlyT2bRjXh0JMhjY6hW+ALEwIH" crossorigin="anonymous">
+
+<style>
+    body {
+        font-family: 'Poppins', sans-serif;
+        background: linear-gradient(135deg, #e3f2fd, #bbdefb);
+        min-height: 100vh;
+        color: #333;
+    }
+    .container-custom { /* Renamed from .container to avoid Bootstrap conflicts */
+        width: 100%;
+        padding: 0 1rem;
+        margin: 2rem auto;
+        max-width: 900px; /* Optional: constrain width */
+    }
+    .card {
+        border: none;
+        border-radius: 12px;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        background: #ffffff;
+        overflow: hidden;
+        transition: transform 0.3s ease, box-shadow 0.3s ease;
+    }
+    .card:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+    }
+    .card-header {
+        background-color: #007bff;
+        color: white;
+        font-weight: 600;
+        padding: 1.5rem;
+        border-bottom: none;
+    }
+    .form-group label {
+        font-weight: 500;
+        margin-bottom: 0.5rem;
+    }
+    .btn-primary {
+        background-color: #007bff;
+        border-color: #007bff;
+        transition: background-color 0.3s ease;
+    }
+    .btn-primary:hover {
+        background-color: #0056b3;
+        border-color: #004085;
+    }
+    .progress-section h4 {
+        margin-top: 1.5rem;
+        margin-bottom: 1rem;
+        color: #007bff;
+    }
+    .progress-bar-container {
+        height: 25px;
+        background-color: #e9ecef;
+        border-radius: 5px;
+        overflow: hidden;
+        margin-bottom: 1rem;
+    }
+    .progress-bar-fill {
+        height: 100%;
+        width: 0%;
+        background-color: #28a745; /* Green */
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: white;
+        font-weight: bold;
+        transition: width 0.5s ease-in-out, background-color 0.3s ease;
+    }
+    .progress-bar-fill.progress { background-color: #007bff; } /* Blue */
+    .progress-bar-fill.success { background-color: #28a745; } /* Green */
+    .progress-bar-fill.fail { background-color: #dc3545; } /* Red */
+    .progress-bar-fill.partial-fail { background-color: #ffc107; } /* Orange */
+
+    .log-container {
+        max-height: 300px;
+        overflow-y: auto;
+        background-color: #e9ecef;
+        border-radius: 8px;
+        padding: 1rem;
+        margin-top: 1rem;
+        font-family: 'Consolas', 'Monaco', monospace;
+        font-size: 0.85em;
+        color: #333;
+    }
+    .log-list {
+        list-style: none;
+        padding: 0;
+        margin: 0;
+    }
+    .log-list li {
+        padding: 0.2rem 0;
+        border-bottom: 1px dotted #ccc;
+    }
+    .log-list li:last-child {
+        border-bottom: none;
+    }
+    .log-list li.success { color: #28a745; }
+    .log-list li.error { color: #dc3545; font-weight: bold; }
+    .log-list li.warning { color: #ffc107; }
+    .log-list li.info { color: #007bff; }
+    .log-list li.completion { font-weight: bold; color: #333; } /* Overall completion messages */
+</style>
+
+<div class="container-custom mt-5">
+    <div class="card">
+        <div class="card-header">
+            {% translate "Import Multiple Forecast Files" %}
+        </div>
+        <div class="card-body p-4">
+            <form id="file-upload-form" method="post" enctype="multipart/form-data">
+                {% csrf_token %}
+                <div class="mb-3">
+                    {{ form.forecast_csv_file.label_tag }}
+                    {{ form.forecast_csv_file }}
+                    {% if form.forecast_csv_file.errors %}
+                        <div class="text-danger">
+                            {% for error in form.forecast_csv_file.errors %}
+                                {{ error }}
+                            {% endfor %}
+                        </div>
+                    {% endif %}
+                </div>
+                <button type="submit" class="btn btn-primary" id="upload-button">{% translate "Upload Files" %}</button>
+            </form>
+
+            <div id="progress-container" class="mt-4" style="display: none;">
+                <h4>{% translate "Overall Upload Progress" %}</h4>
+                <div class="progress-bar-container">
+                    <div id="overall-progress-bar" class="progress-bar-fill progress">0%</div>
+                </div>
+                <p id="overall-status-message"></p>
+
+                <div id="individual-file-progress" class="mt-4">
+                    </div>
+
+                <h4>{% translate "Task Log" %}</h4>
+                <div id="task-logs" class="log-container">
+                    <ul id="log-list" class="log-list">
+                        </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://ajax.googleapis.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+
+<script>
+    jQuery(document).ready(function($) {
+        const $form = $('#file-upload-form');
+        const $uploadButton = $('#upload-button');
+        const $progressContainer = $('#progress-container');
+        const $overallProgressBar = $('#overall-progress-bar');
+        const $overallStatusMessage = $('#overall-status-message');
+        const $individualFileProgress = $('#individual-file-progress');
+        const $logList = $('#log-list');
+        const $taskLogs = $('#task-logs');
+
+        let activeTasks = {};
+        let pollingInterval = null;
+
+        // Get the task status URL name from the Django context
+        // This will be 'admin:task_status_multiple' or 'admin:task_status_experimental'
+        // This variable is correctly passed from admin.py
+        const taskStatusUrlName = "{{ task_status_url_name|default:'admin:task_status_multiple' }}"; 
+
+        // Define a map of your known status URL base paths.
+        // These MUST match your Django URL patterns in admin.py.
+        // Example: /admin/data_load/waterlevelforecast/task-status-multiple/<task_id>/
+        const urlBaseMap = {
+            'admin:task_status': '/admin/data_load/waterlevelobservation/task-status/',
+            'admin:task_status_multiple': '/admin/data_load/waterlevelforecast/task-status-multiple/',
+            'admin:task_status_experimental': '/admin/data_load/waterlevelforecastsexperimentals/task-status-experimental/',
+        };
+
+
+        function addLog(message, type = 'info') {
+            const now = new Date().toLocaleString();
+            const $logItem = $(`<li class="${type}">[${now}] ${message}</li>`);
+            $logList.append($logItem);
+            $taskLogs.scrollTop($taskLogs[0].scrollHeight);
+        }
+
+        function updateOverallProgress() {
+            let totalProgressSum = 0;
+            let completedCount = 0;
+            let failedCount = 0;
+            const taskIds = Object.keys(activeTasks);
+            const totalTasks = taskIds.length;
+
+            if (totalTasks === 0) {
+                $overallProgressBar.css('width', '0%').text('0%').removeClass().addClass('progress-bar-fill progress');
+                $overallStatusMessage.text('No files processed yet.');
+                return;
+            }
+
+            taskIds.forEach(taskId => {
+                const task = activeTasks[taskId];
+                totalProgressSum += task.progress;
+                if (task.state === 'SUCCESS') {
+                    completedCount++;
+                } else if (task.state === 'FAILURE') {
+                    failedCount++;
+                }
+            });
+
+            const overallPercent = Math.round(totalProgressSum / totalTasks);
+            $overallProgressBar.css('width', overallPercent + '%').text(overallPercent + '%');
+
+            let overallMessageText = '';
+            let overallColorClass = 'progress';
+
+            if (completedCount === totalTasks) {
+                overallMessageText = `All ${completedCount} files processed successfully!`;
+                overallColorClass = 'success';
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                addLog('Overall: All files processed successfully!', 'success');
+            } else if (failedCount === totalTasks) {
+                overallMessageText = `All ${failedCount} files failed.`;
+                overallColorClass = 'fail';
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                addLog('Overall: All files failed!', 'error');
+            } else if (failedCount > 0) {
+                overallMessageText = `Processing... ${completedCount} completed, ${failedCount} failed.`;
+                overallColorClass = 'partial-fail';
+            } else {
+                overallMessageText = `Processing ${totalTasks} file(s)... ${completedCount} completed.`;
+            }
+
+            $overallStatusMessage.text(overallMessageText);
+            $overallProgressBar.removeClass('progress success fail partial-fail').addClass('progress-bar-fill').addClass(overallColorClass);
+        }
+
+        function pollAllTaskStatuses() {
+            let allTasksCompleted = true;
+            
+            // Get the correct base URL string from the map using the dynamic name
+            const baseUrl = urlBaseMap[taskStatusUrlName];
+            if (!baseUrl) {
+                console.error("Error: Unknown taskStatusUrlName:", taskStatusUrlName, ". Polling stopped.");
+                addLog(`Error: Invalid task status URL name. Polling stopped. Check console.`, 'error');
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                return; 
+            }
+
+            for (const taskId in activeTasks) {
+                const task = activeTasks[taskId];
+                if (task.state !== 'SUCCESS' && task.state !== 'FAILURE') {
+                    allTasksCompleted = false;
+
+                    // Construct the full URL by appending the taskId
+                    const url = baseUrl + taskId + '/'; 
+
+                    $.ajax({
+                        url: url,
+                        type: 'GET',
+                        dataType: 'json',
+                        success: function(data) {
+                            task.state = data.state;
+                            task.progress = data.percent;
+                            task.message = data.message;
+
+                            if (task.$messageElem) task.$messageElem.text(data.message);
+                            if (task.$fillElem) {
+                                task.$fillElem.css('width', data.percent + '%').text(data.percent + '%');
+                                let individualColorClass = 'progress';
+                                if (data.state === 'FAILURE') individualColorClass = 'fail';
+                                else if (data.state === 'SUCCESS') individualColorClass = 'success';
+                                task.$fillElem.removeClass('progress success fail').addClass(individualColorClass);
+                            }
+                            if (task.$infoElem) task.$infoElem.text(`Status: ${data.state} (${data.current || 0}/${data.total || 0} rows)`);
+
+                            if (data.state === 'FAILURE') {
+                                addLog(`Task for ${task.fileName} failed: ${data.message}`, 'error');
+                            } else if (data.state === 'SUCCESS') {
+                                addLog(`Task for ${task.fileName} completed: ${data.message}`, 'success');
+                            }
+                        },
+                        error: function(xhr, status, error) {
+                            console.error(`Error polling status for task ${taskId}:`, status, error, xhr.responseText);
+                            task.state = 'FAILURE';
+                            task.progress = 0;
+                            task.message = `Fetch error: ${error || status}`;
+                            
+                            if (task.$messageElem) task.$messageElem.text(task.message);
+                            if (task.$fillElem) task.$fillElem.css('width', '100%').text('Error').removeClass('progress success fail').addClass('fail');
+                            if (task.$infoElem) task.$infoElem.text('Failed to fetch status. Check console.');
+                            addLog(`Error polling status for ${task.fileName}: ${error || status} - ${xhr.responseText}`, 'error');
+                        }
+                    });
+                }
+            }
+            updateOverallProgress();
+
+            if (!allTasksCompleted) {
+                pollingInterval = setTimeout(pollAllTaskStatuses, 2000);
+            }
+        }
+
+        $form.on('submit', function(e) {
+            e.preventDefault();
+            
+            // Clear previous progress and logs
+            activeTasks = {};
+            $individualFileProgress.empty();
+            $logList.empty();
+            $progressContainer.hide(); // Hide until tasks are dispatched
+            
+            const formData = new FormData(this);
+            $uploadButton.prop('disabled', true).text('Uploading...');
+            addLog('Uploading files to server...', 'info');
+
+            $.ajax({
+                url: $form.attr('action'),
+                type: 'POST',
+                data: formData,
+                processData: false,
+                contentType: false,
+                dataType: 'json',
+                success: function(response) {
+                    $uploadButton.prop('disabled', false).text('Upload Files');
+                    $progressContainer.show();
+                    addLog('Files uploaded to server. Dispatching tasks...', 'info');
+
+                    if (response.task_ids && response.task_ids.length > 0) {
+                        response.task_ids.forEach(task => {
+                            const taskId = task.id;
+                            const fileName = task.name;
+                            const $taskDiv = $(`
+                                <div id="task-${taskId}" class="mb-3">
+                                    <p><strong>${fileName}:</strong> <span id="message-${taskId}">Starting...</span></p>
+                                    <div class="progress-bar-container">
+                                        <div id="fill-${taskId}" class="progress-bar-fill progress">0%</div>
+                                    </div>
+                                    <p id="info-${taskId}" style="font-size: 0.8em; color: #777;"></p>
+                                </div>
+                            `);
+                            $individualFileProgress.append($taskDiv);
+
+                            activeTasks[taskId] = {
+                                fileName: fileName,
+                                progress: 0,
+                                state: 'PENDING',
+                                message: 'Task submitted...',
+                                $messageElem: $(`#message-${taskId}`),
+                                $fillElem: $(`#fill-${taskId}`),
+                                $infoElem: $(`#info-${taskId}`)
+                            };
+                            addLog(`Task for ${fileName} (ID: ${taskId}) dispatched.`, 'info');
+                        });
+                        totalFilesToProcess = response.total_files; // This is the total number of files initially uploaded
+                        updateOverallProgress();
+                        pollingInterval = setTimeout(pollAllTaskStatuses, 500); // Start polling
+                    } else {
+                        addLog('No tasks were dispatched by the server.', 'warning');
+                        $overallStatusMessage.text('No tasks started.');
+                        $overallProgressBar.css('width', '100%').text('Error').removeClass().addClass('progress-bar-fill fail');
+                    }
+                },
+                error: function(xhr, status, error) {
+                    $uploadButton.prop('disabled', false).text('Upload Files');
+                    $progressContainer.show();
+                    console.error('AJAX error:', status, error, xhr.responseText);
+                    addLog(`Error uploading files: ${error} - ${xhr.responseText}`, 'error');
+                    $overallStatusMessage.text('Error during upload. Check logs.');
+                    $overallProgressBar.css('width', '100%').text('Error').removeClass().addClass('progress-bar-fill fail');
+                }
+            });
+        });
+    });
+</script>
+{% endblock %}

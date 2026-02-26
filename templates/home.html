@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FFWC API Service - Bangladesh Water Development Board</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts - Inter -->
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6; /* Light gray background */
+            color: #1f2937; /* Dark gray text */
+        }
+        .container {
+            max-width: 1000px; /* Max width for content */
+        }
+        .section-title {
+            position: relative;
+            padding-bottom: 0.5rem;
+            margin-bottom: 1.5rem;
+        }
+        .section-title::after {
+            content: '';
+            position: absolute;
+            left: 0;
+            bottom: 0;
+            width: 60px;
+            height: 4px;
+            background-color: #3b82f6; /* Blue underline */
+            border-radius: 9999px; /* Rounded ends */
+        }
+    </style>
+
+    <script>
+        /**
+         * @function openCustomLoginPopUp
+         * @description Opens a custom login page in a new pop-up window.
+         * @param {string} url The URL for the custom login page.
+         */
+        function openCustomLoginPopUp(url) {
+            const width = 600;
+            const height = 700;
+            // Calculate screen center
+            const left = (window.innerWidth / 2) - (width / 2);
+            const top = (window.innerHeight / 2) - (height / 2);
+            const features = `width=${width},height=${height},top=${top},left=${left},scrollbars=yes,resizable=yes`;
+
+            const newWindow = window.open(url, '_blank', features);
+
+            // Focus the new window if it was successfully opened
+            if (newWindow) {
+                newWindow.focus();
+            } else {
+                // Console warning if pop-up blocked. Avoids alert() for better UX.
+                console.warn("Pop-up blocked! Please allow pop-ups for this site if you wish to access the login page in a new window.");
+            }
+        }
+    </script>
+
+</head>
+<body class="antialiased">
+    <div class="min-h-screen flex flex-col items-center py-10 px-4 sm:px-6 lg:px-8">
+        <!-- Header Section -->
+        <header class="w-full bg-blue-700 text-white shadow-lg py-6 rounded-xl mb-10">
+            <div class="container mx-auto flex flex-col md:flex-row items-center justify-between px-6">
+                <div class="text-center md:text-left mb-4 md:mb-0">
+                    <h1 class="text-4xl font-bold tracking-tight">FFWC API Service</h1>
+                    <p class="text-xl mt-1">Flood Forecasting & Warning Centre</p>
+                    <p class="text-lg">Bangladesh Water Development Board</p>
+                </div>
+                
+                <div class="md:text-right">
+                    <img src="/static/admin/img/BWDBLogo.png" alt="BWDB Logo" class="mx-auto md:ml-auto w-24 h-24 rounded-full shadow-md object-cover">
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="container mx-auto bg-white p-8 rounded-xl shadow-xl flex-grow">
+            <!-- Introduction Section -->
+
+           
+        
+
+            <section class="mb-10">
+                <h2 class="text-3xl font-semibold section-title mb-6">Introduction</h2>
+                <p class="text-lg leading-relaxed mb-4">
+                    The Flood Forecasting & Warning Centre (FFWC) API provides real-time and historical flood-related data for various river points across Bangladesh. Developed by the Bangladesh Water Development Board (BWDB), this service aims to empower developers, researchers, and public with critical information to enhance disaster preparedness and response.
+                </p>
+                <p class="text-lg leading-relaxed">
+                    Our mission is to provide accurate and timely flood information, contributing to the safety and resilience of communities nationwide. This API is designed for easy integration into diverse applications, dashboards, and analytical tools.
+                </p>
+            </section>
+
+            <!--API URL Section -->
+            <section class="mb-10">
+                <h2 class="text-3xl font-semibold section-title mb-6">List of API urls</h2>
+                <div class="bg-gray-800 text-white p-6 rounded-lg overflow-x-auto shadow-md">
+                    <pre><code>
+                        <p class="text-lg leading-relaxed mb-4">
+                            CORE APIs <br>
+                            data_load: <a href="{{ data_load }}" class="text-blue-600 underline hover:no-underline">{{ data_load }}</a>
+                        </p>
+                        {% comment %} 
+                        <p class="text-lg leading-relaxed mb-4">
+                            Hello! <a href="javascript:void(0);" onclick="openCustomLoginPopUp('{% url 'custom_login' %}')" class="text-blue-600 underline hover:no-underline font-semibold">Login to Admin Portal</a>
+                        </p> {% endcomment %}
+
+                    </code></pre>
+                </div>
+            </section>
+
+            <!-- Key Features Section -->
+            <section class="mb-10">
+                <h2 class="text-3xl font-semibold section-title mb-6">Key Features</h2>
+                <ul class="list-disc list-inside text-lg leading-relaxed space-y-2 pl-4">
+                    <li><strong class="text-blue-600">Real-time Water Levels:</strong> Access current water levels at designated river stations.</li>
+                    <li><strong class="text-blue-600">Flood Warnings:</strong> Receive immediate alerts and warnings for impending flood situations.</li>
+                    <li><strong class="text-blue-600">Forecasts:</strong> Get short-term flood forecasts (24-hour, 48-hour) for critical points.</li>
+                    <li><strong class="text-blue-600">Historical Data:</strong> Retrieve past water level readings and flood events for analysis.</li>
+                    <li><strong class="text-blue-600">Geospatial Information:</strong> Data includes precise location details for each river station.</li>
+                </ul>
+            </section>
+
+
+
+            <!-- Support & Contact Section -->
+            <section>
+                <h2 class="text-3xl font-semibold section-title mb-6">Support & Contact</h2>
+                <p class="text-lg leading-relaxed mb-4">
+                    If you have any questions, encounter issues, or require further assistance with the FFWC API, please do not hesitate to contact our support team.
+                </p>
+                <ul class="list-disc list-inside text-lg leading-relaxed space-y-2 pl-4">
+                    <li><strong>Email:</strong> <a href="mailto:api.support@bwdb.gov.bd" class="text-blue-600 hover:underline">api.support@bwdb.gov.bd</a></li>
+                    <li><strong>Website:</strong> <a href="https://www.bwdb.gov.bd/" target="_blank" rel="noopener noreferrer" class="text-blue-600 hover:underline">www.bwdb.gov.bd</a></li>
+                    <li><strong>Developer Documentation:</strong> (Link will be provided upon registration)</li>
+                </ul>
+            </section>
+        </main>
+
+        <!-- Footer Section -->
+        <footer class="w-full bg-gray-800 text-white py-6 mt-10 rounded-xl shadow-lg">
+            <div class="container mx-auto text-center text-sm px-6">
+                <p>&copy; Flood Forecasting & Warning Centre, Bangladesh Water Development Board.</p>
+            </div>
+        </footer>
+    </div>
+</body>
+</html>

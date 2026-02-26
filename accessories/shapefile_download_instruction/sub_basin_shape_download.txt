@@ -1,0 +1,17 @@
+
+
+
+1. Goto: http://www.hydrology.bwdb.gov.bd/index.php?pagetitle=surface_water_map_test&subid=282&id=406
+
+    a. select Discharge Location Map from Surface Water Map List
+    b. select Zilla/ Upazilla name from Hydro District List
+    c. Identify the Basin point in bd
+
+2. Goto: https://mghydro.com/watersheds/
+    a. Go to Enter coordinates option
+    b. provide lat and Location
+    c. download your basin Shape/ GeoJSON file
+
+3. For know about river:
+    $ https://ims.cegisbd.com/rims/Map/Mapview
+

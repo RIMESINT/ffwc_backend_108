@@ -1,0 +1,46 @@
+server {
+    server_name ffwc-api.bdservers.site;
+
+    # Increase the max allowed file size to 100MB
+    client_max_body_size 100M;
+
+    # Increase timeout limits
+    proxy_read_timeout 600s;        # Increase the time Nginx waits for a response from Gunicorn
+    client_body_timeout 600s;       # Increase the time Nginx waits for the body from client
+    send_timeout 600s; 
+
+    access_log /var/log/nginx/ffwc_sajib_api_access.log;
+    error_log /var/log/nginx/ffwc_sajib_api_error.log;
+
+    location / {
+        include proxy_params;
+        proxy_pass http://unix:/tmp/ffwc_sajib_api.sock;
+    }
+
+    location /static {
+        alias /var/www/prod/ffwc_django/ffwc_django_project/static;
+    }
+
+    location /media {
+        alias /var/www/prod/ffwc_django/ffwc_django_project/assets;
+    }
+
+    listen 443 ssl; # managed by Certbot
+    ssl_certificate /etc/letsencrypt/live/ffwc-api.bdservers.site/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/ffwc-api.bdservers.site/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf; # managed by Certbot
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem; # managed by Certbot
+
+}
+server {
+    if ($host = ffwc-api.bdservers.site) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    listen 80;
+    server_name ffwc-api.bdservers.site;
+    return 404; # managed by Certbot
+
+
+}

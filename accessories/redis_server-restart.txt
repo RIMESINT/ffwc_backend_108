@@ -1,0 +1,8 @@
+# Restart command:
+sudo systemctl restart redis
+sudo systemctl restart celery
+
+# start celery worker and beat:
+celery -A ffwc_django_project worker --loglevel=info
+celery -A your_project worker -l info
+celery -A ffwc_django_project beat --loglevel=info

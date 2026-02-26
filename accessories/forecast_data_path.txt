@@ -1,0 +1,3 @@
+for 235:
+ECMWF: /dataex-nc-cache/ecmwf-hres
+BMDWRF: /RIMESNAS/WRF_OUT

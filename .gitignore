@@ -1,0 +1,84 @@
+*.sql
+*.gz
+.env
+media/
+backups/
+__pycache__/
+
+
+# Large Data Files (NetCDF)
+*.nc
+20250411/
+20250413/
+20250414/
+20250415/
+20250416/
+20250417/
+20250418/
+20250419/
+20250420/
+cambodiaForecast/
+forecast/
+observed/
+probabilisticObserved/
+
+# Media and Assets
+media/
+assets/
+static/
+staticfiles/
+tiffOutput/
+satelliteRaster/
+
+# Cached and Temporary Files
+__pycache__/
+*.pyc
+.DS_Store
+*.bak
+nohup.out
+celerybeat-schedule.*
+*.pickle
+
+# Log Files
+logs/
+*.log
+
+# Configuration and Credentials
+*.json
+credentials.json
+dbconfig.json
+dbconfig--.json
+env.json
+hasanCredentials.json
+newWebCredential.json
+angular-ee-402820-6ae0c92db72f.json
+ee-sajib-c2656ab8c034.json
+transport-363010-5aa27109c357.json
+
+# Build and Dependency Files
+package-lock.json
+*.deb
+google-chrome-stable_current_amd64.deb
+pyidw-0.2.20/
+build/
+dist/
+*.egg
+*.egg-info/
+
+# Virtual Environment
+.python-version
+venv/
+env/
+
+# Miscellaneous
+.file
+deleted.txt
+*.out
+*.sh
+*.service
+*.save
+gunicorn_test_file.sh
+gunicorn_test_file_port.sh
+node_modules
+backup.sql
+backup.sql

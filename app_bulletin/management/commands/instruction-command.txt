@@ -1,0 +1,32 @@
+###------------------------------------------------------------------------###
+### DOWNLOAD  ECMWF Data for BD
+###------------------------------------------------------------------------###
+1. goto https://rimesnas.myqnapcloud.com/cgi-bin/
+2. goto File Station > ECMWF_HRES 
+3. download .nc files
+
+###------------------------------------------------------------------------###
+### DOWNLOAD  ECMWF Data for PAK and BD both
+###------------------------------------------------------------------------###
+1. goto 114.31.28.235
+2. goto cd ~
+3. goto cd /dataex-nc-cache
+4. goto cd ecmwf-hres/
+5. download using command: scp [user_name]@[server_ip]:/dataex-nc-cache/ecmwf-hres/10042023.nc /home/[user_name]/Downloads
+    Example: scp kuddus@0.0.0.0:/dataex-nc-cache/ecmwf-hres/30042023.nc /home/kuddus/Downloads 
+
+    ###########################################
+    ### Copy directory from local to remote
+    ###########################################
+    scp -r /home/username/SHIFULLAH username@0.0.0.0:/disk01/username/www-htdocs 
+
+
+
+
+
+
+###------------------------------------------------------------------------###
+### FOR ECMWF DATA VISUALIZATION BACKGROUND PROCESS TO STORE JSON COMMAND
+###------------------------------------------------------------------------###
+Pattern: python manage.py [command_file_name] ==> it will take current date automatically
+Example: python manage.py bulletin_contour_plots

@@ -1,0 +1,33 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Upload and Display Files</title>
+</head>
+<body>
+    <h2>Upload and Display Files</h2>
+
+    <form id="post_form" method="post" action="." enctype="multipart/form-data">
+
+
+        {% csrf_token %}
+
+        <!-- <input type="file" multiple/> -->
+        {{ form.as_table }}
+
+        <!-- <input name='imagen' type="file" multiple/> -->
+        <button type='submit'>Upload</button>
+
+        <!-- <input type="submit"  name="submit" value="Submit"/> -->
+    </form>
+
+    <h3>Uploaded Files Here:</h3>
+    <ul>
+        {% for file in files %}
+            <li><a href="{{ file.file.url }}">{{ file.file.name }}</a></li>
+        {% empty %}
+            <li>No files uploaded yet.</li>
+        {% endfor %}
+    </ul>
+</body>
+</html>

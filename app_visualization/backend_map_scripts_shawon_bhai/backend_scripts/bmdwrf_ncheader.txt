@@ -1,0 +1,76 @@
+netcdf wrf_out_2020042600 {
+dimensions:
+	time = UNLIMITED ; // (81 currently)
+	lon = 214 ;
+	lat = 214 ;
+	lev = 1 ;
+variables:
+	double time(time) ;
+		time:standard_name = "time" ;
+		time:units = "hours since 1-1-1 00:00:00" ;
+		time:calendar = "standard" ;
+		time:axis = "T" ;
+	float lon(lon) ;
+		lon:standard_name = "longitude" ;
+		lon:long_name = "longitude" ;
+		lon:units = "degrees_east" ;
+		lon:axis = "X" ;
+	float lat(lat) ;
+		lat:standard_name = "latitude" ;
+		lat:long_name = "latitude" ;
+		lat:units = "degrees_north" ;
+		lat:axis = "Y" ;
+	double lev(lev) ;
+		lev:axis = "Z" ;
+	float t2(time, lev, lat, lon) ;
+		t2:long_name = "TEMP at 2 M (K)" ;
+		t2:_FillValue = 1.e+30f ;
+		t2:missing_value = 1.e+30f ;
+	float rainc(time, lev, lat, lon) ;
+		rainc:long_name = "ACCUMULATED TOTAL CUMULUS PRECIPITATION (mm)" ;
+		rainc:_FillValue = 1.e+30f ;
+		rainc:missing_value = 1.e+30f ;
+	float rainnc(time, lev, lat, lon) ;
+		rainnc:long_name = "ACCUMULATED TOTAL GRID SCALE PRECIPITATION (mm)" ;
+		rainnc:_FillValue = 1.e+30f ;
+		rainnc:missing_value = 1.e+30f ;
+	float swdown(time, lev, lat, lon) ;
+		swdown:long_name = "DOWNWARD SHORT WAVE FLUX AT GROUND SURFACE (W m-2)" ;
+		swdown:_FillValue = 1.e+30f ;
+		swdown:missing_value = 1.e+30f ;
+	float td2(time, lev, lat, lon) ;
+		td2:long_name = "Dewpoint Temperature at 2m (C)" ;
+		td2:_FillValue = 1.e+30f ;
+		td2:missing_value = 1.e+30f ;
+	float clflo(time, lev, lat, lon) ;
+		clflo:long_name = "Low Cloud Fraction (%)" ;
+		clflo:_FillValue = 1.e+30f ;
+		clflo:missing_value = 1.e+30f ;
+	float clfmi(time, lev, lat, lon) ;
+		clfmi:long_name = "Mid Cloud Fraction (%)" ;
+		clfmi:_FillValue = 1.e+30f ;
+		clfmi:missing_value = 1.e+30f ;
+	float clfhi(time, lev, lat, lon) ;
+		clfhi:long_name = "High Cloud Fraction (%)" ;
+		clfhi:_FillValue = 1.e+30f ;
+		clfhi:missing_value = 1.e+30f ;
+	float rh2(time, lev, lat, lon) ;
+		rh2:long_name = "Relative Humidity at 2m (%)" ;
+		rh2:_FillValue = 1.e+30f ;
+		rh2:missing_value = 1.e+30f ;
+	float ws10(time, lev, lat, lon) ;
+		ws10:long_name = "Wind Speed at 10 M (m s-1)" ;
+		ws10:_FillValue = 1.e+30f ;
+		ws10:missing_value = 1.e+30f ;
+	float wd10(time, lev, lat, lon) ;
+		wd10:long_name = "Wind Direction at 10 M (Degrees)" ;
+		wd10:_FillValue = 1.e+30f ;
+		wd10:missing_value = 1.e+30f ;
+
+// global attributes:
+		:CDI = "Climate Data Interface version ?? (http://mpimet.mpg.de/cdi)" ;
+		:Conventions = "CF-1.6" ;
+		:history = "Sun Apr 26 14:04:56 2020: cdo select,name=t2,td2,rainc,rainnc,rh2,ws10,wd10,swdown,clfmi,clflo,clfhi wrf_2020042600.nc wrf_out_2020042600.nc\n",
+			"Sun Apr 26 14:04:35 2020: cdo -f nc import_binary 2020042600.ctl wrf_2020042600.nc" ;
+		:CDO = "Climate Data Operators version 1.9.3 (http://mpimet.mpg.de/cdo)" ;
+}

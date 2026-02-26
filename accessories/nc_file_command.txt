@@ -1,0 +1,24 @@
+1. cdo -showtimestamp 30042023.nc
+2. cdo -showtime 30042023.nc 
+3. cdo -infon 30042023.nc
+
+
+# remap with existing nc file
+cdo remapbil,20082023.nc ecmwf_all_elevation.nc ecmwf_real_elevation.nc
+
+# SEE all values of a variable
+ncdump -t -v time merged_file.nc
+
+
+
+#################################################
+### grib to NETCDF convert using cdo
+#################################################
+sudo apt-get install cdo nco   # Debian/Ubuntu
+cdo -f nc copy input.grib output.nc
+
+#################################################
+### Crop NETCDF file using nco
+#################################################
+sudo apt-get install nco
+ncks -d latitude,10.0,20.0 -d longitude,30.0,40.0 input_file.nc output_file.nc

@@ -1,0 +1,7 @@
+
+############################################
+### Copy from IMD GFS
+############################################
+scp -P 22 imdnwp@sftp.nwp.imd.gov.in:/Pool_A/SFTP/UserHome/imdnwp/nwp_data/gfs_rimes/2025030300/gfsrain.grib /home/shaif/Documents
+
+

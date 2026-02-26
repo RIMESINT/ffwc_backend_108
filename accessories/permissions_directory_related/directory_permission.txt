@@ -1,0 +1,10 @@
+1. Permission a directory with its sub-dir and all files
+    $ sudo chmod -R 777 /rimes_sesame_backend/static/
+
+2. change ownership of a file:
+    $ sudo chown sajib:sajib /ffwc_flash_flood_guidence/forecast/bmd_wrf/wrf_out_2024090200.nc
+
+3. Change ownership of a directory:
+    $ sudo chown -R sajib:sajib /ffwc_flash_flood_guidence/forecast/bmd_wrf/
+    $ sudo chown -R sajib:sajib /var/www/prod/SHAIF/ffwc_flash_flood_guidence/forecast/bmd_wrf/
+

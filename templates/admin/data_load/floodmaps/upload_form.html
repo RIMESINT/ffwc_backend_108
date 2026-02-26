@@ -1,0 +1,41 @@
+{% extends 'admin/base_site.html' %}
+{% load i18n admin_urls static %}
+
+{% block content %}
+<div id="content-main">
+    <form action="" method="post" enctype="multipart/form-data" id="upload-form">
+        {% csrf_token %}
+        <fieldset class="module aligned">
+            <h2>{{ title }}</h2>
+            {% if form.errors %}
+                <p class="errornote">
+                    {% if form.non_field_errors %}
+                        {{ form.non_field_errors }}
+                    {% else %}
+                        {% translate "Please correct the error below." %}
+                    {% endif %}
+                </p>
+            {% endif %}
+
+            {% for field in form %}
+                <div class="form-row {% if field.field.required %}required{% endif %}">
+                    <div class="fieldWrapper">
+                        {% if field.errors %}
+                            <ul class="errorlist">{% for error in field.errors %}<li>{{ error }}</li>{% endfor %}</ul>
+                        {% endif %}
+                        {{ field.label_tag }}
+                        {{ field }}
+                        {% if field.help_text %}
+                            <p class="help">{{ field.help_text|safe }}</p>
+                        {% endif %}
+                    </div>
+                </div>
+            {% endfor %}
+        </fieldset>
+
+        <div class="submit-row">
+            <input type="submit" value="{% translate 'Upload' %}" class="default" name="_submit">
+        </div>
+    </form>
+</div>
+{% endblock %}

@@ -1,0 +1,8 @@
+##################################################################
+### Generate bulletin contourf plot
+##################################################################
+# command: python filename yyyymmdd
+# example: python app_bulletin/agromet_bulletin/contour_plot_script/bulletin_contour_plots.py 20230430 
+
+command: python filename ddmmyyyy
+example: python app_bulletin/agromet_bulletin/contour_plot_script/bulletin_contour_plots.py 30042023 

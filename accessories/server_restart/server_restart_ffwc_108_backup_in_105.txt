@@ -1,0 +1,31 @@
+###############################################
+### BHUTAN_ADSS BRANCH
+### ffwc-api-shaifullah.bdservers.site
+### 103.141.9.105
+###############################################
+# Restart server
+cd www-htdocs/SESAME_PLUS/rimes_sesame_backend/
+git pull
+git pull origin dev_shaif
+
+git fetch
+git merge origin/dev_shaif
+
+OR
+
+sudo systemctl restart ffwc_sajib_api_port.service 
+sudo systemctl restart ffwc_sajib_api_celery_beat_port.service 
+sudo systemctl restart ffwc_sajib_api_celery_worker_port.service 
+sudo systemctl restart postgresql
+sudo systemctl restart nginx.service
+
+### if any change happen in services
+sudo systemctl daemon-reload
+
+##################################################
+### Merging 1 branch to another 
+##################################################
+git checkout develop    # Switch to the develop branch
+git merge -s ours dev_shaif   # Merge the bhutan_adss branch into develop, favoring changes from bhutan_adss
+git push origin develop     # Push the changes to the remote repository
+

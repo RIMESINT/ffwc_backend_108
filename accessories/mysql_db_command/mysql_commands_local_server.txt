@@ -1,0 +1,113 @@
+#######################################################
+### INSTALL MySQL
+#######################################################
+sudo apt update
+sudo apt install mysql-server
+
+sudo systemctl start mysql
+sudo systemctl enable mysql
+
+sudo mysql_secure_installation
+
+sudo systemctl status mysql 
+sudo systemctl restart mysql 
+
+
+
+#######################################################
+### create database user and alter password in POSTGRES
+#######################################################
+sudo mysql -u root -p
+
+CREATE DATABASE ffwc_new;
+CREATE DATABASE ffwc; 
+CREATE DATABASE ffwc_shaif_v1; 
+CREATE DATABASE c7ffwcdb; 
+
+SHOW DATABASES;
+
+CREATE USER 'ffwc'@'localhost' IDENTIFIED BY 'password@1234';
+GRANT ALL PRIVILEGES ON ffwc_new.* TO 'ffwc'@'localhost';
+GRANT ALL PRIVILEGES ON ffwc.* TO 'ffwc'@'localhost';
+GRANT ALL PRIVILEGES ON ffwc_shaif_v1.* TO 'ffwc'@'localhost';
+GRANT ALL PRIVILEGES ON c7ffwcdb.* TO 'ffwc'@'localhost';
+FLUSH PRIVILEGES;
+
+exit;
+
+
+######################################################################################################################
+######################################################################################################################
+### will write these command later
+######################################################################################################################
+######################################################################################################################
+GRANT ALL PRIVILEGES ON DATABASE bhutan_adss_db TO ngsesame;
+ALTER ROLE ngsesame WITH SUPERUSER;        # make a user to superuser
+
+
+#######################################################
+### VIEW POSTGRES TABLE and Users
+#######################################################
+psql -l
+
+SELECT User, Host FROM mysql.user;
+
+
+#######################################################
+### DUMP MySQL DATABASE
+#######################################################
+command: mysqldump -u database_user_name -p db_name > directory_where_want_to_save
+example: mysqldump -u ffwc -p ffwc_shaif_v1 > ffwc_shaif_v1.sql
+example: mysqldump -u root -p ffwc_shaif_v1 > ffwc_shaif_v1.sql
+
+
+#######################################################
+### RESTORE MySQL DATABASE
+#######################################################
+mysql -u ffwc -p ffwc_shaif_v1 < ffwc_shaif_v1.sql
+
+
+##################################################################
+### SHOW tables of an existing database
+################################################################## 
+1. Login to MySQL: mysql -u ffwc -p
+2. Select the Database: USE ffwc_shaif_v1;
+3. SHOW TABLES;
+4. EXIT;
+
+##################################################################
+##################################################################
+### Empty an existing database
+##################################################################
+##################################################################
+1. Login to MySQL: mysql -u ffwc -p
+2. Select the Database: USE ffwc_shaif_v1;
+3. Generate and Execute Drop Table Commands: 
+SET foreign_key_checks = 0;
+SET GROUP_CONCAT_MAX_LEN=32768;
+SET @tables = NULL;
+SELECT GROUP_CONCAT('`', table_name, '`') INTO @tables
+  FROM information_schema.tables 
+  WHERE table_schema = (SELECT DATABASE());
+SELECT IFNULL(@tables,'dummy') INTO @tables;
+SET @tables = CONCAT('DROP TABLE IF EXISTS ', @tables);
+PREPARE stmt FROM @tables;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+SET foreign_key_checks = 1;
+
+4. Exit MySQL: EXIT;
+
+
+#########################################################
+#########################################################
+### RE INSTALL MYSQL
+#########################################################
+#########################################################
+sudo apt-get remove --purge mysql-server mysql-client mysql-common
+sudo apt-get autoremove
+sudo apt-get autoclean
+sudo apt-get install mysql-server
+
+
+

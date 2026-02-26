@@ -1,0 +1,203 @@
+{% extends "admin/change_list.html" %}
+{% load i18n static %}
+
+{% block object-tools %}
+    <div class="custom-admin-module">
+        <h2>Management Commands</h2>
+        <div class="custom-admin-module-content">
+            <button id="generateFloodAlertsBtn" class="generate-button">Generate Flood Alerts</button>
+        </div>
+    </div>
+    <div id="task-progress-container" style="display: none;">
+        <div id="progress-bar-wrapper">
+            <div id="progress-bar">0%</div>
+        </div>
+        <div id="progress-bar-message">Waiting for task to start...</div>
+        <div id="task-completion-message" style="display: none;"></div>
+        <div id="task-error-message" style="display: none;"></div>
+    </div>
+    {{ block.super }}
+{% endblock %}
+
+
+{% block extrahead %}
+    {{ block.super }}
+    <style>
+        /* Re-add your custom CSS styles here */
+        /* ... (paste your .custom-admin-module, .generate-button, and #task-progress-container styles) ... */
+        .custom-admin-module {
+            width: 1400px;
+            margin-bottom: 20px; 
+            border: 1px solid #e0e0e0; 
+            border-radius: 4px; 
+            background-color: #fff; 
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05); 
+        }
+        .custom-admin-module h2 {
+            background-color: #417690;
+            color: #fff;
+            padding: 10px 15px;
+            margin: 0;
+            font-size: 1.1em;
+            font-weight: normal;
+            border-bottom: 1px solid #3c6b80;
+            border-top-left-radius: 4px;
+            border-top-right-radius: 4px;
+        }
+        .custom-admin-module-content {
+            padding: 15px;
+            align-items: center;
+            gap: 20px;
+            display: flex;
+        }
+        .custom-admin-module-content .generate-button {
+            background-color: #007bff;
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .custom-admin-module-content .generate-button:hover {
+            background-color: #0056b3;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+        }
+        .custom-admin-module-content .generate-button:active {
+            background-color: #004085;
+            transform: translateY(0);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        #task-progress-container {
+            width: 1400px;
+            margin-top: 20px;
+            margin-bottom: 20px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background-color: #fff;
+            padding: 15px;
+            display: none;
+            flex-direction: column;
+            gap: 10px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+        }
+        #progress-bar-wrapper {
+            background-color: #e9ecef;
+            border-radius: 5px;
+            overflow: hidden;
+            height: 25px;
+        }
+        #progress-bar {
+            width: 0%;
+            height: 100%;
+            background-color: #28a745;
+            border-radius: 3px;
+            text-align: center;
+            line-height: 25px;
+            color: white;
+            font-weight: bold;
+            transition: width 0.4s ease-in-out;
+            font-size: 0.9em;
+        }
+        #progress-bar-message {
+            font-size: 0.9em;
+            color: #555;
+            text-align: center;
+        }
+        #task-completion-message {
+            font-size: 1em;
+            font-weight: bold;
+            color: #28a745;
+            margin-top: 5px;
+            text-align: center;
+        }
+        #task-error-message {
+            font-size: 1em;
+            font-weight: bold;
+            color: #dc3545;
+            margin-top: 5px;
+            text-align: center;
+        }
+    </style>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="{% static 'celery_progress/celery_progress.js' %}"></script>
+    <script>
+        $(document).ready(function() {
+            var $generateButton = $('#generateFloodAlertsBtn');
+            var $progressContainer = $('#task-progress-container');
+            var $progressBar = $('#progress-bar');
+            var $progressBarMessage = $('#progress-bar-message');
+            var $completionMessage = $('#task-completion-message');
+            var $errorMessage = $('#task-error-message');
+
+            $generateButton.on('click', function() {
+                var button = $(this);
+                button.prop('disabled', true).text('Starting Task...');
+
+                $progressContainer.show();
+                $completionMessage.hide().text('');
+                $errorMessage.hide().text('');
+                $progressBar.css('width', '0%').text('0%');
+                $progressBarMessage.text('Sending request...');
+
+                $.ajax({
+                    // Use the new URL name
+                    url: '{% url "admin:data_load_districtfloodalert_run-flood-alerts" %}',
+                    type: 'POST',
+                    data: {
+                        'csrfmiddlewaretoken': $('input[name="csrfmiddlewaretoken"]').val()
+                    },
+                    success: function(response) {
+                        if (response.status === 'success' && response.task_id) {
+                            $progressContainer.show();
+                            $progressBarMessage.text('Task queued. Waiting for progress...');
+                            
+                            CeleryProgressBar.initProgressBar(
+                                '{% url "celery_progress:task_status" "00000000-0000-0000-0000-000000000000" %}'.replace('00000000-0000-0000-0000-000000000000', response.task_id),
+                                {
+                                    onProgress: function(progressBarElement, progressBarMessageElement, progress) {
+                                        $(progressBarElement).css('width', progress.percent + '%').text(Math.round(progress.percent) + '%');
+                                        if (progress.description) {
+                                            $(progressBarMessageElement).text(progress.description);
+                                        } else {
+                                            $(progressBarMessageElement).text('Processing: ' + progress.current + ' of ' + progress.total + ' (' + Math.round(progress.percent) + '%)');
+                                        }
+                                    },
+                                    onSuccess: function(result, progressBarElement, progressBarMessageElement) {
+                                        $(progressBarElement).css('width', '100%').text('100%');
+                                        $(progressBarMessageElement).text('Task completed!');
+                                        $completionMessage.text(result.message || 'Task completed successfully!').show();
+                                        button.prop('disabled', false).text('Generate Flood Alerts');
+                                    },
+                                    onError: function(result, progressBarElement, progressBarMessageElement) {
+                                        $(progressBarElement).css('width', '100%').css('background-color', '#dc3545').text('Error!');
+                                        $(progressBarMessageElement).text('Task failed!');
+                                        $errorMessage.text(result.message || 'Task failed due to an error.').show();
+                                        button.prop('disabled', false).text('Generate Flood Alerts');
+                                    },
+                                }
+                            );
+                        } else {
+                            alert('Error: ' + (response.message || 'Unknown error occurred.'));
+                            button.prop('disabled', false).text('Generate Flood Alerts');
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        var errorMessage = "An AJAX error occurred.";
+                        if (xhr.responseJSON && xhr.responseJSON.message) {
+                            errorMessage += " " + xhr.responseJSON.message;
+                        } else {
+                            errorMessage += " Status: " + status + ", Error: " + error;
+                        }
+                        alert(errorMessage);
+                        button.prop('disabled', false).text('Generate Flood Alerts');
+                    },
+                });
+            });
+        });
+    </script>
+{% endblock %}

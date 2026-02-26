@@ -1,0 +1,20 @@
+{% extends 'admin/filter.html' %}
+{% load i18n %}
+
+{% block extra_head %}
+    {{ block.super }}
+    {{ spec.form.media }}
+{% endblock %}
+
+{% block content %}
+<div class="date-range-filter-container">
+    <h3>{% trans 'By Date Range' %}</h3>
+    <form method="get">
+        {{ spec.form.as_p }}
+        <input type="submit" value="{% trans 'Filter' %}">
+        {% if spec.selected %}
+            <a href="{{ spec.query_string }}" class="clear-filter">{% trans "Clear" %}</a>
+        {% endif %}
+    </form>
+</div>
+{% endblock %}

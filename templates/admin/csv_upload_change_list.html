@@ -1,0 +1,7 @@
+<!DOCTYPE html>
+{% extends "admin/change_list.html" %}
+
+{% block object-tools %}
+<a href="{% url 'admin:waterlevelobservation-upload-csv' %}" class="btn btn-primary">Import CSV</a>
+{{ block.super }}
+{% endblock %}
