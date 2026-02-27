@@ -61,6 +61,8 @@ from data_load.models import (
     # FfwcRainfallStations2025
 )
 
+from .models import DistrictFloodAlert, WaterlevelAlert
+
 import os
 
 import logging
@@ -1862,251 +1864,889 @@ class ThresholdBasinsListCreateView(generics.ListAPIView):
     queryset = models.ThresholdBasins.objects.all()
     serializer_class = serializers.ThresholdBasinsSerializer
 
+
+from .models import WaterLevelObservation
+
 @api_view(['GET'])
-def district_flood_alerts_observed_forecast_by_observed_dates(request, date):
+def district_flood_alerts(request):
+    
+    def calculate_flood_level(water_level, danger_level):
+        if danger_level is None or water_level is None or water_level < 0:
+            return "na"
+        # Convert to float for comparison if coming from DecimalField
+        water_level = float(water_level)
+        danger_level = float(danger_level)
+        
+        if water_level >= danger_level + 1:
+            return "severe"
+        elif water_level >= danger_level:
+            return "flood"
+        elif water_level >= danger_level - 0.5:
+            return "warning"
+        else:
+            return "normal"
+
+    # 1. Get the latest observation date for each station within the last 24 hours
+    # We filter stations that have a danger_level and a district
+    time_threshold = timezone.now() - timedelta(hours=24)
+    
+    latest_obs_ids = WaterLevelObservation.objects.filter(
+        observation_date__gte=time_threshold,
+        station_id__danger_level__isnull=False,
+        station_id__district__isnull=False
+    ).values('station_id').annotate(
+        latest_date=Max('observation_date')
+    )
+
+    # 2. Fetch the actual records based on the latest dates
+    # We use Q objects to match the specific station-date pairs
+    q_statement = Q()
+    for obj in latest_obs_ids:
+        q_statement |= Q(station_id=obj['station_id'], observation_date=obj['latest_date'])
+
+    if not latest_obs_ids:
+        return JsonResponse({"alerts": [], "message": "No recent observations found."}, status=200)
+
+    observations = WaterLevelObservation.objects.filter(q_statement).select_related('station_id').values(
+        'water_level',
+        'station_id__district',
+        'station_id__danger_level'
+    )
+
+    # 3. Process the alerts by district
+    district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
+
+    for obs in observations:
+        district_name = (obs['station_id__district'] or "").lower().strip()
+        if not district_name:
+            continue
+
+        flood_level = calculate_flood_level(
+            obs['water_level'], 
+            obs['station_id__danger_level']
+        )
+        district_alerts[district_name][flood_level] += 1
+
+    # 4. Format the result
+    result = []
+    # Priority mapping for determining the overall district status
+    priority = ["severe", "flood", "warning", "normal"]
+
+    for district, levels in district_alerts.items():
+        max_level = "na"
+        for level in priority:
+            if levels[level] > 0:
+                max_level = level
+                break
+        
+        result.append({
+            "district": district.capitalize(),
+            "alert_type": FLOOD_LEVELS.get(max_level, max_level),
+        })
+
+    return JsonResponse({"alerts": sorted(result, key=lambda x: x['district'])}, safe=False)
+
+
+@api_view(['GET'])
+def district_flood_alerts_by_date(request, date):
     """
-    Retrieves pre-calculated district flood alerts from the database.
-    Attempts to fetch for the specified date and subsequent 6 days.
-    If no data is available for this period, it falls back to the most recent
-    available alert_date in the database and fetches 7 days from there.
+    Fetch flood alerts by district using Station and WaterLevelObservation 
+    models for a specific historical date combined with current time.
     """
-    requested_start_date = None
+    
+    def calculate_flood_level(water_level, danger_level):
+        if danger_level is None or water_level is None or water_level < 0:
+            return "na"
+        
+        water_level = float(water_level)
+        danger_level = float(danger_level)
+        
+        if water_level >= danger_level + 1:
+            return "severe"
+        elif water_level >= danger_level:
+            return "flood"
+        elif water_level >= danger_level - 0.5:
+            return "warning"
+        else:
+            return "normal"
+
+    # 1. Parse and validate the date parameter
+    try:
+        query_date = datetime.strptime(date, '%Y-%m-%d')
+    except ValueError:
+        return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+    # Combine provided date with current time for "as of this time" logic
+    current_now = timezone.now()
+    constructed_datetime = timezone.make_aware(
+        datetime.combine(query_date.date(), current_now.time())
+    )
+
+    # 2. Get the latest observation date for each station UP TO the requested datetime
+    # We only care about stations that have a district and a danger_level
+    latest_obs_metadata = WaterLevelObservation.objects.filter(
+        observation_date__lte=constructed_datetime,
+        station_id__district__isnull=False,
+        station_id__danger_level__isnull=False
+    ).values('station_id').annotate(
+        latest_date=Max('observation_date')
+    )
+
+    if not latest_obs_metadata:
+        return JsonResponse({"alerts": [], "message": "No data found for this date."}, status=200)
+
+    # 3. Use Q objects to fetch the actual observation records for those specific dates
+    q_statement = Q()
+    for item in latest_obs_metadata:
+        q_statement |= Q(station_id=item['station_id'], observation_date=item['latest_date'])
+
+    # Fetching the observations while "reaching through" the FK to get Station details
+    observations = WaterLevelObservation.objects.filter(q_statement).select_related('station_id').values(
+        'water_level',
+        'station_id__district',
+        'station_id__danger_level'
+    )
+
+    # 4. Aggregate alerts by District
+    district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
+
+    for obs in observations:
+        district_raw = obs['station_id__district']
+        if not district_raw:
+            continue
+            
+        district_name = district_raw.lower().strip()
+        flood_level = calculate_flood_level(obs['water_level'], obs['station_id__danger_level'])
+        district_alerts[district_name][flood_level] += 1
+
+    # 5. Format and Sort results
+    result = []
+    priority = ["severe", "flood", "warning", "normal"]
+
+    for district, levels in district_alerts.items():
+        max_level = "na"
+        for level in priority:
+            if levels[level] > 0:
+                max_level = level
+                break
+        
+        result.append({
+            "district": district.capitalize(),
+            "alert_type": FLOOD_LEVELS.get(max_level, max_level),
+        })
+
+    return JsonResponse({"alerts": sorted(result, key=lambda x: x['district'])}, safe=False)
+
+@api_view(['GET'])
+def district_flood_alerts_forecast_by_date(request, date):
+    """
+    Fetch 7-day flood alerts (1 observed + 6 forecast) by district 
+    using the new Station, WaterLevelObservation, and WaterLevelForecast models.
+    """
+    
+    def calculate_flood_level(water_level, danger_level):
+        if danger_level is None or water_level is None or water_level < 0:
+            return "na"
+        
+        water_level = float(water_level)
+        danger_level = float(danger_level)
+        
+        if water_level >= danger_level + 1:
+            return "severe"
+        elif water_level >= danger_level:
+            return "flood"
+        elif water_level >= danger_level - 0.5:
+            return "warning"
+        else:
+            return "normal"
+
+    # 1. Parse and validate the start date
+    try:
+        start_date = datetime.strptime(date, '%Y-%m-%d')
+    except ValueError:
+        return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+    result = []
+
+    # 2. Loop through 7 days (Day 0 = Observed, Days 1-6 = Forecast)
+    for day_offset in range(7):
+        current_date = start_date + timedelta(days=day_offset)
+        day_start = timezone.make_aware(current_date.replace(hour=0, minute=0, second=0, microsecond=0))
+        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+
+        # Initialize grouping
+        district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
+
+        # Select the appropriate model (Observation vs Forecast)
+        # Assuming your new forecast model is 'WaterLevelForecast' with similar fields
+        if day_offset == 0:
+            DataModel = WaterLevelObservation
+            date_field = 'observation_date'
+            wl_field = 'water_level'
+        else:
+            # Update this to your actual Forecast model name
+            DataModel = WaterLevelForecast 
+            date_field = 'forecast_date'
+            wl_field = 'water_level'
+
+        # 3. Get the latest reading for each station on this specific day
+        # Filter for stations that have necessary metadata
+        latest_readings_metadata = DataModel.objects.filter(
+            **{f"{date_field}__range": (day_start, day_end)},
+            station_id__district__isnull=False,
+            station_id__danger_level__isnull=False
+        ).values('station_id').annotate(
+            max_date=Max(date_field)
+        )
+
+        if latest_readings_metadata:
+            # Build query for the specific latest records
+            q_statement = Q()
+            for item in latest_readings_metadata:
+                q_statement |= Q(station_id=item['station_id'], **{date_field: item['max_date']})
+
+            # Fetch water levels and district info in one join
+            daily_data = DataModel.objects.filter(q_statement).select_related('station_id').values(
+                wl_field,
+                'station_id__district',
+                'station_id__danger_level'
+            )
+
+            for entry in daily_data:
+                district_raw = entry['station_id__district']
+                if not district_raw:
+                    continue
+                
+                district_name = district_raw.lower().strip()
+                status = calculate_flood_level(entry[wl_field], entry['station_id__danger_level'])
+                district_alerts[district_name][status] += 1
+
+        # 4. Consolidate daily results
+        daily_output = []
+        priority = ["severe", "flood", "warning", "normal"]
+
+        for district, levels in district_alerts.items():
+            max_level = "na"
+            for level in priority:
+                if levels[level] > 0:
+                    max_level = level
+                    break
+            
+            daily_output.append({
+                "district": district.capitalize(),
+                "alert_type": FLOOD_LEVELS.get(max_level, max_level),
+            })
+
+        result.append({
+            "date": current_date.strftime('%Y-%m-%d'),
+            "alerts": sorted(daily_output, key=lambda x: x['district'])
+        })
+
+    return JsonResponse(result, safe=False)
+
+@api_view(['GET'])
+def district_flood_observed_and_forecast_alerts_by_available_dates(request, date=None):
+    
+    def calculate_flood_level(water_level, danger_level):
+        if danger_level is None or water_level is None or water_level < 0:
+            return "na"
+        wl, dl = float(water_level), float(danger_level)
+        if wl >= dl + 1: return "severe"
+        if wl >= dl: return "flood"
+        if wl >= dl - 0.5: return "warning"
+        return "normal"
+
+    # 1. Get the latest available dates from the new models
+    latest_obs = WaterLevelObservation.objects.aggregate(Max('observation_date'))['observation_date__max']
+    # Note: Replace 'WaterLevelForecast' and 'forecast_date' with your actual forecast model names
+    latest_fc = WaterLevelForecast.objects.aggregate(Max('forecast_date'))['forecast_date__max']
+
+    if not latest_obs:
+        return JsonResponse({"error": "No observed data available."}, status=500)
+
+    result = []
+    priority = ["severe", "flood", "warning", "normal"]
+
+    # 2. Helper function to process alerts for a specific date range and model
+    def get_daily_district_alerts(model, date_field, day_start, day_end):
+        district_counts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
+        
+        # Get the latest reading per station for this specific day
+        latest_readings = model.objects.filter(
+            **{f"{date_field}__range": (day_start, day_end)},
+            station_id__district__isnull=False,
+            station_id__danger_level__isnull=False
+        ).values('station_id').annotate(max_dt=Max(date_field))
+
+        if not latest_readings:
+            return []
+
+        # Fetch the actual data using a join
+        q_statement = Q()
+        for item in latest_readings:
+            q_statement |= Q(station_id=item['station_id'], **{date_field: item['max_dt']})
+
+        data_rows = model.objects.filter(q_statement).select_related('station_id').values(
+            'water_level', 'station_id__district', 'station_id__danger_level'
+        )
+
+        for row in data_rows:
+            dist = row['station_id__district'].lower().strip()
+            lvl = calculate_flood_level(row['water_level'], row['station_id__danger_level'])
+            district_counts[dist][lvl] += 1
+
+        # Determine top alert per district
+        summary = []
+        for dist, counts in district_counts.items():
+            max_lvl = "na"
+            for p in priority:
+                if counts[p] > 0:
+                    max_lvl = p
+                    break
+            summary.append({
+                "district": dist.capitalize(),
+                "alert_type": FLOOD_LEVELS.get(max_lvl, max_lvl)
+            })
+        return sorted(summary, key=lambda x: x['district'])
+
+    # Day 0: Observed
+    d0_start = timezone.make_aware(datetime.combine(latest_obs.date(), datetime.min.time()))
+    d0_end = d0_start + timedelta(days=1) - timedelta(microseconds=1)
+    result.append({
+        "date": latest_obs.strftime('%Y-%m-%d'),
+        "alerts": get_daily_district_alerts(WaterLevelObservation, 'observation_date', d0_start, d0_end)
+    })
+
+    # Days 1-6: Forecast
+    if latest_fc:
+        fc_base_date = latest_fc.date()
+        for i in range(6):
+            curr_date = fc_base_date + timedelta(days=i)
+            ds = timezone.make_aware(datetime.combine(curr_date, datetime.min.time()))
+            de = ds + timedelta(days=1) - timedelta(microseconds=1)
+            
+            result.append({
+                "date": curr_date.strftime('%Y-%m-%d'),
+                "alerts": get_daily_district_alerts(WaterLevelForecast, 'forecast_date', ds, de)
+            })
+
+    return JsonResponse(result, safe=False)
+
+@api_view(['GET'])
+def district_flood_observed_and_forecast_alerts_by_observed_date(request, date):
+    """
+    Fetch pre-calculated flood alerts. If the requested date doesn't exist, 
+    fall back to the latest available 7-day window.
+    """
     try:
         requested_start_date = datetime.strptime(date, '%Y-%m-%d').date()
         logger.info(f"API request for flood alerts starting from: {requested_start_date}")
     except ValueError:
-        logger.error(f"Invalid date format: {date}")
-        return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD (e.g., 2025-07-08)."}, status=400)
+        return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
-    # Define the 7-day window based on the requested date
-    # This is the initial period we will attempt to fetch data for
-    initial_fetch_start_date = requested_start_date
+    # 1. Define the 7-day window based on input
     initial_fetch_end_date = requested_start_date + timedelta(days=6)
 
-    # --- Attempt to fetch data for the requested 7-day period ---
-    alerts_for_initial_period = models.DistrictFloodAlert.objects.filter(
-        alert_date__range=(initial_fetch_start_date, initial_fetch_end_date)
+    # 2. Attempt to fetch data for the requested period
+    # We use select_related('alert_type') to avoid the "Object not serializable" error
+    # and to make the database query efficient (SQL JOIN).
+    alerts_to_process = DistrictFloodAlert.objects.filter(
+        alert_date__range=(requested_start_date, initial_fetch_end_date)
     ).select_related('alert_type').order_by('alert_date', 'district_name')
 
-    # Check if any data was found for the initial period
-    if not alerts_for_initial_period.exists():
-        logger.info(f"No data found for requested period ({initial_fetch_start_date} to {initial_fetch_end_date}). Initiating fallback.")
+    final_start_date = requested_start_date
 
-        # --- Fallback Plan: Find the most recent available alert_date ---
-        latest_available_alert_date_agg = models.DistrictFloodAlert.objects.aggregate(Max('alert_date'))
-        latest_available_date = latest_available_alert_date_agg['alert_date__max']
+    # 3. Fallback Plan: If no alerts exist for the requested range
+    if not alerts_to_process.exists():
+        logger.info(f"No data for {requested_start_date}. Seeking latest available date.")
+        
+        latest_date_agg = DistrictFloodAlert.objects.aggregate(Max('alert_date'))
+        latest_available_date = latest_date_agg['alert_date__max']
 
-        if latest_available_date:
-            # Adjust the start_date to the most recent available date
-            final_start_date = latest_available_date
-            logger.info(f"Falling back to most recent available date: {final_start_date}")
+        if not latest_available_date:
+            return JsonResponse({"warning": "No flood alert data available in the system."}, status=200)
 
-            # Re-fetch data based on the new, adjusted start_date
-            final_end_date = final_start_date + timedelta(days=6)
-            alerts_to_process = models.DistrictFloodAlert.objects.filter(
-                alert_date__range=(final_start_date, final_end_date)
-            ).select_related('alert_type').order_by('alert_date', 'district_name')
+        # Update final_start_date to the latest found in DB
+        final_start_date = latest_available_date
+        final_end_date = final_start_date + timedelta(days=6)
+        
+        alerts_to_process = DistrictFloodAlert.objects.filter(
+            alert_date__range=(final_start_date, final_end_date)
+        ).select_related('alert_type').order_by('alert_date', 'district_name')
 
-            if not alerts_to_process.exists():
-                logger.warning(f"Even after fallback, no data found for period starting {final_start_date}.")
-                return JsonResponse({"warning": "No historical data available in the system for any date."}, status=200)
-
-        else:
-            logger.warning("No flood alert data available in the database at all.")
-            return JsonResponse({"warning": "No flood alert data available in the system for any date."}, status=200)
-    else:
-        # Data found for the requested period, so use it
-        final_start_date = initial_fetch_start_date
-        final_end_date = initial_fetch_end_date
-        alerts_to_process = alerts_for_initial_period # Use the data already fetched
-
-    # --- Organize and format the data for response ---
+    # 4. Organize and format the data
+    # We map the results into a dictionary grouped by date
     organized_alerts = defaultdict(list)
     for alert in alerts_to_process:
-        alert_data = {
-            "district": alert.district_name,
-            "alert_type": alert.alert_type.alert_type
-        }
-        organized_alerts[alert.alert_date].append(alert_data)
+        # FIX: Access the string field of the related WaterlevelAlert model
+        # I am assuming the field name inside WaterlevelAlert is also 'alert_type'
+        # If it is 'name' or 'label', change alert.alert_type.alert_type to alert.alert_type.name
+        alert_label = "na"
+        if alert.alert_type:
+            # Get the raw string (e.g., 'severe') from the related model
+            raw_type = alert.alert_type.alert_type 
+            # Convert to display label using your FLOOD_LEVELS mapping
+            alert_label = FLOOD_LEVELS.get(raw_type, raw_type)
 
+        organized_alerts[alert.alert_date].append({
+            "id": alert.id,
+            "district": alert.district_name.capitalize() if alert.district_name else "Unknown",
+            "alert_type": alert_label 
+        })
+
+    # 5. Build the final 7-day result list
     result = []
     for day_offset in range(7):
         current_date = final_start_date + timedelta(days=day_offset)
-        current_date_str = current_date.strftime('%Y-%m-%d')
-
-        daily_alerts = organized_alerts.get(current_date, [])
-        # Ensure sorting if it's not guaranteed by DB query (though it should be)
-        daily_alerts = sorted(daily_alerts, key=lambda x: x['district'])
-
+        
+        # Pull alerts from our dictionary; sort by district name for the UI
+        daily_list = organized_alerts.get(current_date, [])
+        sorted_daily_list = sorted(daily_list, key=lambda x: x['district'])
+        
         result.append({
-            "date": current_date_str,
-            "alerts": daily_alerts
+            "date": current_date.strftime('%Y-%m-%d'),
+            "alerts": sorted_daily_list
         })
 
-    # Final check for empty result (shouldn't happen if previous checks are robust)
+    # Final check to ensure we aren't returning an empty list
     if not result:
-        logger.warning("Unexpected: Result is empty after processing alerts. Check logic.")
-        return JsonResponse({"warning": "An unexpected issue occurred, no data to display."}, status=500)
+        return JsonResponse({"error": "Failed to generate alert data."}, status=500)
 
     return Response(result)
 
+
+@api_view(['GET'])
+def district_flood_observed_and_forecast_alerts_by_observed_date_grouped_by_districts(request, date):
+    """
+    Fetch flood alerts grouped by district for the provided date (observed) 
+    and the next 6 days (forecasted) using the new Station model architecture.
+    """
+    def calculate_flood_level(water_level, danger_level):
+        if danger_level is None or water_level is None or water_level < 0:
+            return "na"
+        wl, dl = float(water_level), float(danger_level)
+        if wl >= dl + 1: return "severe"
+        if wl >= dl: return "flood"
+        if wl >= dl - 0.5: return "warning"
+        return "normal"
+
+    # 1. Parse and validate the date parameter
+    try:
+        start_date_obj = datetime.strptime(date, '%Y-%m-%d').date()
+    except ValueError:
+        return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+    # 2. Determine how many forecast days are available
+    # Replace 'WaterLevelForecast' and 'forecast_date' with your actual model names
+    latest_forecast_agg = WaterLevelForecast.objects.aggregate(Max('forecast_date'))
+    latest_fc_dt = latest_forecast_agg['forecast_date__max']
+
+    max_days = 1
+    if latest_fc_dt:
+        forecast_end_date = latest_fc_dt.date()
+        # Max 7 days total (Day 0 + 6 forecast days)
+        days_diff = (forecast_end_date - start_date_obj).days
+        max_days = min(7, 1 + max(0, days_diff))
+
+    # Structure: { district_name: { date_str: {severe: 0, ...} } }
+    district_data_map = defaultdict(lambda: defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0}))
+
+    # 3. Process each day (Day 0: Observation, Day 1-6: Forecast)
+    for day_offset in range(max_days):
+        current_date = start_date_obj + timedelta(days=day_offset)
+        ds = timezone.make_aware(datetime.combine(current_date, datetime.min.time()))
+        de = ds + timedelta(days=1) - timedelta(microseconds=1)
+        
+        # Select Model and Field names based on offset
+        if day_offset == 0:
+            Model, date_field = WaterLevelObservation, 'observation_date'
+        else:
+            Model, date_field = WaterLevelForecast, 'forecast_date'
+
+        # Get latest reading per station for this specific date
+        latest_readings = Model.objects.filter(
+            **{f"{date_field}__range": (ds, de)},
+            station_id__district__isnull=False,
+            station_id__danger_level__isnull=False
+        ).values('station_id').annotate(max_dt=Max(date_field))
+
+        if latest_readings:
+            q_statement = Q()
+            for item in latest_readings:
+                q_statement |= Q(station_id=item['station_id'], **{date_field: item['max_dt']})
+
+            # Fetch water levels and district info in one join
+            daily_rows = Model.objects.filter(q_statement).select_related('station_id').values(
+                'water_level', 'station_id__district', 'station_id__danger_level'
+            )
+
+            current_date_str = current_date.strftime('%Y-%m-%d')
+            for row in daily_rows:
+                dist = row['station_id__district'].lower().strip()
+                lvl = calculate_flood_level(row['water_level'], row['station_id__danger_level'])
+                district_data_map[dist][current_date_str][lvl] += 1
+
+    # 4. Format the pivoted result
+    result = []
+    priority = ["severe", "flood", "warning", "normal"]
+
+    # We need to ensure every district has an entry for every day in the range
+    for dist_name, dates_dict in district_data_map.items():
+        district_entry = {
+            "district": dist_name.capitalize(),
+            "alerts": []
+        }
+        
+        for day_offset in range(max_days):
+            target_date = start_date_obj + timedelta(days=day_offset)
+            target_date_str = target_date.strftime('%Y-%m-%d')
+            
+            counts = dates_dict.get(target_date_str, {"na": 1})
+            
+            # Determine top level for this district on this date
+            max_lvl = "na"
+            for p in priority:
+                if counts.get(p, 0) > 0:
+                    max_lvl = p
+                    break
+            
+            district_entry["alerts"].append({
+                "date": target_date_str,
+                "alert_type": FLOOD_LEVELS.get(max_lvl, max_lvl)
+            })
+            
+        result.append(district_entry)
+
+    return JsonResponse(sorted(result, key=lambda x: x["district"]), safe=False)
+    
+
+
+@api_view(['GET'])
+def district_flood_alerts_forecast_by_date(request, date):
+
+    def calculate_flood_level(water_level, danger_level):
+        if danger_level is None or water_level is None or water_level < 0:
+            return "na"
+        elif water_level >= danger_level + 1:
+            return "severe"
+        elif water_level >= danger_level:
+            return "flood"
+        elif water_level >= danger_level - 0.5:
+            return "warning"
+        else:
+            return "normal"
+
+    # Parse and validate the date parameter (expected format: YYYY-MM-DD)
+    try:
+        start_date = datetime.strptime(date, '%Y-%m-%d')
+    except ValueError:
+        return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD (e.g., 2023-11-02)."}, status=400)
+
+    # Fetch stations with valid district and danger level (once, reused for all days)
+    stations = FfwcStations2025.objects.filter(
+        district__isnull=False,
+        dl__isnull=False,
+        web_id__isnull=False
+    ).exclude(
+        district=''  # Exclude empty district strings
+    ).values('web_id', 'station', 'district', 'dl')
+
+    if not stations:
+        return JsonResponse({"error": "No valid station data found."}, status=500)
+
+    # Initialize result list for 7 days
+    result = []
+
+    # Process 7 days: Day 0 (observed), Days 1-6 (forecasted)
+    for day_offset in range(7):
+        current_date = start_date + timedelta(days=day_offset)
+        # Define the 24-hour range for the current date
+        day_start = current_date.replace(hour=0, minute=0, second=0, microsecond=0)
+        day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
+
+        # Initialize district alerts
+        district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
+
+        # Get data: observed for day 0, forecasted for days 1-6
+        if day_offset == 0:
+            latest_data = WaterLevelObservations.objects.filter(
+                wl_date__range=(day_start, day_end)
+            ).values('st_id').annotate(
+                latest_date=Max('wl_date')
+            ).values('st_id', 'latest_date', 'waterlevel')
+        else:
+            latest_data = WaterLevelForecasts.objects.filter(
+                fc_date__range=(day_start, day_end)
+            ).values('st_id').annotate(
+                latest_date=Max('fc_date')
+            ).values('st_id', 'latest_date', 'waterlevel')
+
+        # Convert data to a dictionary for quick lookup
+        data_dict = {item['st_id']: item for item in latest_data}
+
+        # Process stations
+        for station in stations:
+            station_id = station['web_id']
+            district_name = station['district'].lower().strip()
+            if not district_name:
+                continue  # Skip stations with empty districts
+
+            if station_id in data_dict:
+                if station_id == 0:
+                    continue
+                else:
+                    data = data_dict[station_id]
+                    try:
+                        water_level = float(data['waterlevel'])
+                        danger_level = float(station['dl'])
+                        flood_level = calculate_flood_level(water_level, danger_level)
+                        district_alerts[district_name][flood_level] += 1
+                    except (ValueError, TypeError):
+                        district_alerts[district_name]["na"] += 1
+
+        # Determine primary alert type per district
+        daily_alerts = []
+        for district, levels in district_alerts.items():
+            max_level = "na"
+            for level in ["severe", "flood", "warning", "normal"]:
+                if levels[level] > 0:
+                    max_level = level
+                    break
+            daily_alerts.append({
+                "district": district.capitalize(),
+                "alert_type": FLOOD_LEVELS[max_level],
+            })
+
+        # Sort daily alerts by district name
+        daily_alerts = sorted(daily_alerts, key=lambda x: x['district'])
+
+        # Add to result
+        result.append({
+            "date": current_date.strftime('%Y-%m-%d'),
+            "alerts": daily_alerts
+        })
+
+    return JsonResponse(result, safe=False)
+
+
 # @api_view(['GET'])
-# def district_flood_alerts_observed_forecast_by_observed_dates(request, date):
+# def nearby_district_flood_alerts_by_date_and_radius(request, date, nearby_radius):
+#     """
+#     Fetch flood alerts and identifies nearby district alerts within a specific radius
+#     using the new Station and WaterLevelObservation models.
+#     """
+
 #     def calculate_flood_level(water_level, danger_level):
 #         if danger_level is None or water_level is None or water_level < 0:
 #             return "na"
-#         elif water_level >= danger_level + 1:
-#             return "severe"
-#         elif water_level >= danger_level:
-#             return "flood"
-#         elif water_level >= danger_level - 0.5:
-#             return "warning"
-#         else:
-#             return "normal"
+#         wl, dl = float(water_level), float(danger_level)
+#         if wl >= dl + 1: return "severe"
+#         if wl >= dl: return "flood"
+#         if wl >= dl - 0.5: return "warning"
+#         return "normal"
 
-#     # Parse and validate the date parameter (YYYY-MM-DD)
+#     # 1. Parameter Validation
 #     try:
-#         start_date = datetime.strptime(date, '%Y-%m-%d').date()
-#         logger.info(f"Processing flood alerts for start date: {start_date}")
+#         query_date = datetime.strptime(date, '%Y-%m-%d')
 #     except ValueError:
-#         logger.error(f"Invalid date format: {date}")
-#         return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD (e.g., 2025-07-02)."}, status=400)
+#         return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
-#     # Fetch stations with valid district and danger level
-#     stations = models.Station.objects.filter(
-#         district__isnull=False,
-#         danger_level__isnull=False,
-#         station_id__isnull=False
-#     ).exclude(
-#         district=''
-#     ).values('station_id', 'name', 'district', 'danger_level')
+#     try:
+#         radius_km = float(nearby_radius)
+#         if not (0 < radius_km <= 1000):
+#             raise ValueError
+#     except (ValueError, TypeError):
+#         return JsonResponse({"error": "Radius must be a number between 0 and 1000 km."}, status=400)
 
-#     if not stations:
-#         logger.error("No valid station data found with non-null district and danger_level")
-#         return JsonResponse({"error": "No valid station data found."}, status=500)
+#     # Combine date with current time for "as-of-now" historical queries
+#     current_now = timezone.now()
+#     constructed_dt = timezone.make_aware(
+#         datetime.combine(query_date.date(), current_now.time())
+#     )
 
-#     logger.info(f"Found {len(stations)} valid stations")
+#     # 2. Optimized Query: Fetch latest readings and station metadata in one go
+#     # We filter for stations that have valid coordinates and districts
+#     latest_metadata = WaterLevelObservation.objects.filter(
+#         observation_date__lte=constructed_dt,
+#         station_id__district__isnull=False,
+#         station_id__danger_level__isnull=False,
+#         station_id__latitude__isnull=False,
+#         station_id__longitude__isnull=False
+#     ).values('station_id').annotate(max_dt=Max('observation_date'))
 
-#     # Get the latest forecast date
-#     latest_forecast = models.WaterLevelForecast.objects.aggregate(Max('forecast_date'))
-#     latest_forecast_date = latest_forecast['forecast_date__max']
-#     logger.info(f"Latest forecast date: {latest_forecast_date}")
+#     if not latest_metadata:
+#         return JsonResponse({"alerts": [], "message": "No data found for this period."}, status=200)
 
-#     # Initialize result list
-#     result = []
+#     # Fetch actual records
+#     q_statement = Q()
+#     for item in latest_metadata:
+#         q_statement |= Q(station_id=item['station_id'], observation_date=item['max_dt'])
 
-#     # Determine how many forecast days are available
-#     max_days = 7  # 1 observed + 6 forecasted
-#     if latest_forecast_date:
-#         forecast_end_date = latest_forecast_date.date()
-#         forecast_start_date = start_date + timedelta(days=1)
-#         days_available = (forecast_end_date - forecast_start_date).days + 1
-#         max_forecast_days = min(6, max(0, days_available))
-#         max_days = min(max_days, 1 + max_forecast_days)
-#     else:
-#         max_days = 1  # Only observed data if no forecasts
-#         logger.warning("No forecast data available, limiting to observed data")
+#     observations = WaterLevelObservation.objects.filter(q_statement).select_related('station_id').values(
+#         'water_level',
+#         'station_id__station_id',
+#         'station_id__district',
+#         'station_id__danger_level',
+#         'station_id__latitude',
+#         'station_id__longitude'
+#     )
 
-#     # Process up to 7 days: Day 0 (observed), Days 1-6 (forecasted if available)
-#     for day_offset in range(max_days):
-#         current_date = start_date + timedelta(days=day_offset)
-#         day_start = datetime.combine(current_date, datetime.min.time())
-#         day_end = day_start + timedelta(days=1) - timedelta(microseconds=1)
-#         print(f"Processing day {day_offset}: {day_start} to {day_end}")
-#         logger.debug(f"Processing day {day_offset}: {day_start} to {day_end}")
+#     # 3. Data Processing
+#     district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
+#     stations_for_geo = [] # List for distance comparisons
 
-#         # Initialize district alerts
-#         district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
+#     for obs in observations:
+#         dist_raw = obs['station_id__district'].lower().strip()
+#         lvl = calculate_flood_level(obs['water_level'], obs['station_id__danger_level'])
+#         district_alerts[dist_raw][lvl] += 1
+        
+#         stations_for_geo.append({
+#             "district": dist_raw,
+#             "coords": (obs['station_id__latitude'], obs['station_id__longitude'])
+#         })
 
-#         # Get data: observed for day 0, forecasted for days 1-6
-#         if day_offset == 0:
-#             try:
-#                 latest_data = models.WaterLevelObservation.objects.filter(
-#                     observation_date__range=(day_start, day_end),
-#                     station_id__isnull=False,
-#                     station_id__station_id__in=[s['station_id'] for s in stations]
-#                 ).values('station_id__station_id').annotate(
-#                     max_waterlevel=Max('water_level')
-#                 ).values('station_id__station_id', 'max_waterlevel')
-
-#                 if not latest_data:
-#                     logger.warning(f"No observed data for {day_start}, trying previous day")
-#                     day_start -= timedelta(days=1)
-#                     day_end -= timedelta(days=1)
-#                     latest_data = models.WaterLevelObservation.objects.filter(
-#                         observation_date__range=(day_start, day_end),
-#                         station_id__isnull=False,
-#                         station_id__station_id__in=[s['station_id'] for s in stations]
-#                     ).values('station_id__station_id').annotate(
-#                         max_waterlevel=Max('water_level')
-#                     ).values('station_id__station_id', 'max_waterlevel')
-#             except Exception as e:
-#                 logger.error(f"Error fetching observed data: {str(e)}")
-#                 latest_data = []
-#         else:
-#             latest_data = models.WaterLevelForecast.objects.filter(
-#                 forecast_date__range=(day_start, day_end),
-#                 station_id__isnull=False,
-#                 station_id__station_id__in=[s['station_id'] for s in stations]
-#             ).values('station_id__station_id').annotate(
-#                 max_waterlevel=Max('water_level')
-#             ).values('station_id__station_id', 'max_waterlevel')
-
-#         logger.info(f"Found {len(latest_data)} data records for {current_date}")
-
-#         # Convert data to a dictionary for quick lookup
-#         data_dict = {item['station_id__station_id']: item for item in latest_data}
-
-#         # Process stations
-#         for station in stations:
-#             station_id = station['station_id']
-#             district_name = station['district'].lower().strip()
-#             if not district_name:
+#     # 4. Geospatial Proximity Calculation
+#     # We map each district to a set of other districts within the radius
+#     nearby_map = defaultdict(set)
+#     for i in range(len(stations_for_geo)):
+#         s1 = stations_for_geo[i]
+#         for j in range(i + 1, len(stations_for_geo)):
+#             s2 = stations_for_geo[j]
+            
+#             # Avoid same-district comparisons
+#             if s1['district'] == s2['district']:
 #                 continue
+                
+#             distance = geodesic(s1['coords'], s2['coords']).kilometers
+#             if distance <= radius_km:
+#                 nearby_map[s1['district']].add(s2['district'])
+#                 nearby_map[s2['district']].add(s1['district'])
 
-#             if station_id in data_dict:
-#                 data = data_dict[station_id]
-#                 try:
-#                     water_level = float(data['max_waterlevel'])
-#                     danger_level = float(station['danger_level'])
-#                     flood_level = calculate_flood_level(water_level, danger_level)
-#                     district_alerts[district_name][flood_level] += 1
-#                 except (ValueError, TypeError) as e:
-#                     logger.debug(f"Invalid data for station {station_id}: {str(e)}")
-#                     district_alerts[district_name]["na"] += 1
-#             else:
-#                 district_alerts[district_name]["na"] += 1
+#     # 5. Format Output
+#     result = []
+#     priority = ["severe", "flood", "warning", "normal"]
 
-#         # Determine primary alert type per district
-#         daily_alerts = []
-#         for district, levels in district_alerts.items():
-#             max_level = "na"
-#             for level in ["severe", "flood", "warning", "normal"]:
-#                 if levels[level] > 0:
-#                     max_level = level
+#     for district, levels in district_alerts.items():
+#         # Get primary status
+#         main_status = "na"
+#         for p in priority:
+#             if levels[p] > 0:
+#                 main_status = p
+#                 break
+
+#         # Get status for nearby districts
+#         nearby_data = []
+#         for n_dist in nearby_map[district]:
+#             n_levels = district_alerts.get(n_dist, {"na": 1})
+#             n_status = "na"
+#             for p in priority:
+#                 if n_levels.get(p, 0) > 0:
+#                     n_status = p
 #                     break
-#             daily_alerts.append({
-#                 "district": district.capitalize(),
-#                 "alert_type": FLOOD_LEVELS[max_level],
+            
+#             nearby_data.append({
+#                 "district": n_dist.capitalize(),
+#                 "alert_type": FLOOD_LEVELS.get(n_status, n_status)
 #             })
 
-#         # Sort daily alerts by district name
+#         result.append({
+#             "district": district.capitalize(),
+#             "alert_type": FLOOD_LEVELS.get(main_status, main_status),
+#             "nearby_districts": sorted(nearby_data, key=lambda x: x['district'])
+#         })
+
+#     return JsonResponse({"alerts": sorted(result, key=lambda x: x['district'])}, safe=False)
+
+
+
+
+# @api_view(['GET'])
+# def district_flood_alerts_observed_forecast_by_observed_dates(request, date):
+#     """
+#     Retrieves pre-calculated district flood alerts from the database.
+#     Attempts to fetch for the specified date and subsequent 6 days.
+#     If no data is available for this period, it falls back to the most recent
+#     available alert_date in the database and fetches 7 days from there.
+#     """
+#     requested_start_date = None
+#     try:
+#         requested_start_date = datetime.strptime(date, '%Y-%m-%d').date()
+#         logger.info(f"API request for flood alerts starting from: {requested_start_date}")
+#     except ValueError:
+#         logger.error(f"Invalid date format: {date}")
+#         return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD (e.g., 2025-07-08)."}, status=400)
+
+#     # Define the 7-day window based on the requested date
+#     # This is the initial period we will attempt to fetch data for
+#     initial_fetch_start_date = requested_start_date
+#     initial_fetch_end_date = requested_start_date + timedelta(days=6)
+
+#     # --- Attempt to fetch data for the requested 7-day period ---
+#     alerts_for_initial_period = models.DistrictFloodAlert.objects.filter(
+#         alert_date__range=(initial_fetch_start_date, initial_fetch_end_date)
+#     ).select_related('alert_type').order_by('alert_date', 'district_name')
+
+#     # Check if any data was found for the initial period
+#     if not alerts_for_initial_period.exists():
+#         logger.info(f"No data found for requested period ({initial_fetch_start_date} to {initial_fetch_end_date}). Initiating fallback.")
+
+#         # --- Fallback Plan: Find the most recent available alert_date ---
+#         latest_available_alert_date_agg = models.DistrictFloodAlert.objects.aggregate(Max('alert_date'))
+#         latest_available_date = latest_available_alert_date_agg['alert_date__max']
+
+#         if latest_available_date:
+#             # Adjust the start_date to the most recent available date
+#             final_start_date = latest_available_date
+#             logger.info(f"Falling back to most recent available date: {final_start_date}")
+
+#             # Re-fetch data based on the new, adjusted start_date
+#             final_end_date = final_start_date + timedelta(days=6)
+#             alerts_to_process = models.DistrictFloodAlert.objects.filter(
+#                 alert_date__range=(final_start_date, final_end_date)
+#             ).select_related('alert_type').order_by('alert_date', 'district_name')
+
+#             if not alerts_to_process.exists():
+#                 logger.warning(f"Even after fallback, no data found for period starting {final_start_date}.")
+#                 return JsonResponse({"warning": "No historical data available in the system for any date."}, status=200)
+
+#         else:
+#             logger.warning("No flood alert data available in the database at all.")
+#             return JsonResponse({"warning": "No flood alert data available in the system for any date."}, status=200)
+#     else:
+#         # Data found for the requested period, so use it
+#         final_start_date = initial_fetch_start_date
+#         final_end_date = initial_fetch_end_date
+#         alerts_to_process = alerts_for_initial_period # Use the data already fetched
+
+#     # --- Organize and format the data for response ---
+#     organized_alerts = defaultdict(list)
+#     for alert in alerts_to_process:
+#         alert_data = {
+#             "district": alert.district_name,
+#             "alert_type": alert.alert_type.alert_type
+#         }
+#         organized_alerts[alert.alert_date].append(alert_data)
+
+#     result = []
+#     for day_offset in range(7):
+#         current_date = final_start_date + timedelta(days=day_offset)
+#         current_date_str = current_date.strftime('%Y-%m-%d')
+
+#         daily_alerts = organized_alerts.get(current_date, [])
+#         # Ensure sorting if it's not guaranteed by DB query (though it should be)
 #         daily_alerts = sorted(daily_alerts, key=lambda x: x['district'])
 
-#         # Add to result
 #         result.append({
-#             "date": current_date.strftime('%Y-%m-%d'),
+#             "date": current_date_str,
 #             "alerts": daily_alerts
 #         })
 
+#     # Final check for empty result (shouldn't happen if previous checks are robust)
 #     if not result:
-#         logger.warning("No data available for the specified period")
-#         return JsonResponse({"warning": "No data available for the specified period"}, status=200)
+#         logger.warning("Unexpected: Result is empty after processing alerts. Check logic.")
+#         return JsonResponse({"warning": "An unexpected issue occurred, no data to display."}, status=500)
 
-#     return JsonResponse(result, safe=False)
-
-
-
+#     return Response(result)
 
 
 
@@ -3032,6 +3672,84 @@ class FfwcStations2025BulkUpdateView(APIView):
         return Response({"message": f"Updated {updated_count} stations"}, status=200)
 
 
+class WaterlevelAlertListView(generics.ListAPIView):
+    queryset = models.WaterlevelAlert.objects.all().order_by('alert_no')  
+    serializer_class = serializers.WaterlevelAlertSerializer
+
+
+@api_view(['PUT'])
+def update_district_flood_alert(request, id):
+    """
+        Update alert_type for a specific DistrictFloodAlert by ID
+    """
+    alert = get_object_or_404(models.DistrictFloodAlert, pk=id)
+    
+    alert_type_id = request.data.get('alert_type')
+    if not alert_type_id:
+        return Response(
+            {"error": "alert_type field is required"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        new_alert_type = models.WaterlevelAlert.objects.get(pk=alert_type_id)
+    except models.WaterlevelAlert.DoesNotExist:
+        return Response(
+            {"error": f"Invalid alert_type ID: {alert_type_id}"},
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    alert_object = models.WaterlevelAlert.objects.filter(pk=alert_type_id)[0]
+    updated = models.DistrictFloodAlert.objects.filter(
+        pk=id,
+    ).update(alert_type=alert_object)
+    
+    # alert.alert_type = new_alert_type
+    # alert.save()
+    
+    # alert_return_object = DistrictFloodAlert.objects.filter(pk=id)[0]
+    # {
+    #     "id": alert_return_object.id,
+    #     "alert_date": alert_return_object.alert_date,
+    #     "district": alert_return_object.district_name,
+    #     "alert_type": alert_return_object.alert_type
+    # }
+    
+    # return Response({
+    #     "id": alert_return_object.id,
+    #     "alert_date": alert_return_object.alert_date,
+    #     "district": alert_return_object.district_name,
+    #     "alert_type": alert_return_object.alert_type
+    # }, status=status.HTTP_200_OK)
+    
+    return Response({
+        "message": f"Successfully updated flood status of ID: {id}"
+    }, status=status.HTTP_200_OK)
+
+
+class DistrictFloodAlertCreateView(generics.CreateAPIView):
+    
+    queryset = models.DistrictFloodAlert.objects.all()
+    serializer_class = serializers.DistrictFloodAlertSerializer
+
+    def create(self, request, *args, **kwargs):
+        try:
+            # return super().create(request, *args, **kwargs)
+            serializer = self.get_serializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            self.perform_create(serializer)
+            
+            return Response({
+                "message": "Successfully flood status created."
+            }, status=status.HTTP_200_OK)
+            
+        except IntegrityError:
+            return Response(
+                {"error": "Alert for this district and date already exists."},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+            
+
 
 from data_load.models import BulletinRelatedManue
 from data_load.serializers import BulletinRelatedManueSerializer
@@ -3041,6 +3759,39 @@ class BulletinRelatedManueViewSet(viewsets.ReadOnlyModelViewSet):
     """
     queryset = BulletinRelatedManue.objects.all().order_by('id')
     serializer_class = BulletinRelatedManueSerializer
+
+
+from django.shortcuts import get_object_or_404
+from django.http import Http404
+from rest_framework import generics
+from data_load.models import EnsModelChoice
+from data_load.serializers import EnsModelChoiceSerializer
+
+class EnsModelChoiceListAPI(generics.ListAPIView):
+
+    serializer_class = EnsModelChoiceSerializer
+
+    def get_queryset(self):
+        station_id = self.kwargs.get('station_id')
+        date_str = self.kwargs.get('date')
+
+        if not station_id or not date_str:
+            raise Http404("Station ID and date must be provided in the URL.")
+
+        try:
+            # Filter the queryset
+            queryset = EnsModelChoice.objects.filter(
+                station_id=station_id,
+                date__startswith=date_str
+            ).order_by('-date')
+
+            if not queryset.exists():
+                return EnsModelChoice.objects.none()
+
+            return queryset
+
+        except Exception as e:
+            raise Http404(f"Invalid date format or other error: {e}")
 
 
 

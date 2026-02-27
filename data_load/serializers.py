@@ -1317,11 +1317,52 @@ class FfwcStations2025BulkUpdateSerializer(serializers.ModelSerializer):
         
 
 
+
+
 from data_load.models import BulletinRelatedManue
 class BulletinRelatedManueSerializer(serializers.ModelSerializer):
     class Meta:
         model = BulletinRelatedManue
         fields = ['id', 'title', 'title_bn', 'url']
+
+
+
+
+# Adding Flood Alert Serializers
+
+        
+class WaterlevelAlertSerializer(serializers.ModelSerializer):
+    
+    class Meta:
+        model = models.WaterlevelAlert
+        fields = ['id', 'alert_no', 'alert_type']  
+
+
+
+class DistrictFloodAlertSerializer(serializers.ModelSerializer):
+    
+    alert_type = serializers.PrimaryKeyRelatedField(
+        queryset=models.WaterlevelAlert.objects.all()
+    )
+
+    class Meta:
+        model = models.DistrictFloodAlert
+        fields = ['alert_date', 'district_name', 'alert_type']
+        validators = [
+            serializers.UniqueTogetherValidator(
+                queryset=models.DistrictFloodAlert.objects.all(),
+                fields=('alert_date', 'district_name'),
+                message="Alert for this district and date already exists."
+            )
+        ]
+
+
+
+from data_load.models import EnsModelChoice
+class EnsModelChoiceSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EnsModelChoice 
+        fields = ['id', 'station_id', 'date', 'model_name']
 
 
 
@@ -1391,3 +1432,8 @@ class JsonEntrySerializer(serializers.Serializer):
             if key not in fields:
                 fields[key] = serializers.JSONField(required=False)
         return fields
+
+
+
+
+

@@ -149,9 +149,22 @@ urlpatterns = [
     path('medium-range-forecast-by-station/<int:st_id>/', views.WaterLevelForecastsExperimentalsView.as_view(),name='medium-range-forecast-by-station'), 
 
 
-    re_path(r'^district-flood-alerts-observed-forecast-by-observed-dates/(?P<date>\d{4}-\d{2}-\d{2})/$',
-        views.district_flood_alerts_observed_forecast_by_observed_dates,name='district-flood-alerts-observed-forecast-by-observed-dates'
-    ),
+
+    path('district-flood-alerts/', views.district_flood_alerts, name='district-flood-alerts'),
+    path('district-flood-alerts-by-date/<str:date>/', views.district_flood_alerts_by_date, name='district-flood-alerts-by-date'),
+    path('district-flood-alerts-forecast-by-date/<str:date>/', views.district_flood_alerts_forecast_by_date, name='district-flood-alerts-forecast-by-date'),
+    path('district-flood-alerts-observed-forecast-by-available-dates/<str:date>/', views.district_flood_observed_and_forecast_alerts_by_available_dates, name='district-flood-alerts-observed-forecast-by-available-dates'),
+
+
+    path('district-flood-alerts-observed-forecast-by-observed-dates/<str:date>/', views.district_flood_observed_and_forecast_alerts_by_observed_date, name='district-flood-alerts-observed-forecast-by-observed-dates'),
+    path('district-flood-alerts-observed-forecast-by-observed-dates-grouped-by-disrcits/<str:date>/', views.district_flood_observed_and_forecast_alerts_by_observed_date_grouped_by_districts, name='district-flood-alerts-observed-forecast-by-observed-dates-grouped-by-disrcits'),
+    
+    # path('nearby-district-flood-alerts-by-date-and-radius/<str:date>/<float:nearby_radius>/', views.nearby_district_flood_alerts_by_date_and_radius, name='nearby_district_flood_alerts_by_date_and_radius'),
+
+
+    # re_path(r'^district-flood-alerts-observed-forecast-by-observed-dates/(?P<date>\d{4}-\d{2}-\d{2})/$',
+    #     views.district_flood_alerts_observed_forecast_by_observed_dates,name='district-flood-alerts-observed-forecast-by-observed-dates'
+    # ),
 
 
 
@@ -222,6 +235,20 @@ urlpatterns = [
         FfwcStations2025BulkUpdateView.as_view(), 
         name='web_id_wise_serial_bulk_update_ffwc_stations_2025'
     ),
+
+
+    path(
+        'v1/water_level_list_view/', 
+        views.WaterlevelAlertListView.as_view(), 
+        name='water_level_list_view'
+    ),
+
+   path(
+        'v1/district-alerts/update/<int:id>/', 
+        views.update_district_flood_alert,
+        name='district-alerts-update' 
+    ),
+
 
         # Endpoint for GET (listing all tasks)
     path('scheduled-tasks/', ScheduledTaskListView.as_view(), name='scheduled-task-list'),

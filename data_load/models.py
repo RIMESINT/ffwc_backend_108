@@ -487,6 +487,7 @@ class FloodSummaryReport(models.Model):
     def __str__(self):
         return f"Flood Summary Report for {self.report_date}"
 
+
 class WaterlevelAlert(models.Model):
     alert_no = models.IntegerField(unique=True) # Now alert_no should be unique but not the primary key
     alert_type = models.CharField(max_length=100, unique=True)
@@ -758,3 +759,44 @@ class JsonEntry(models.Model):
         # We can try to get an ID from the JSON data if it exists for a better admin display
         entry_id = self.id
         return f"JSON Entry ID: {entry_id}"
+
+
+
+
+
+"""
+    ################################################################
+    ### Added by SHAIF | Date: 2025-AUG-19
+    ### Assigned by Sajib Bhai
+    ################################################################
+""" 
+class EnsModelChoice(models.Model):
+    """
+    Represents the choice of an ensemble model for a specific station and date.
+    """
+    station_id = models.IntegerField(
+        help_text="The ID of the station.",
+        null=True, blank=True,
+    )
+    date = models.DateTimeField(
+        help_text="The date and time for which the model was chosen.",
+        null=True, blank=True,
+    )
+    model_name = models.CharField(
+        max_length=1024, 
+        help_text="The name of the chosen model (e.g., 'ECMWF-ENS', 'GEFS').",
+        null=True, blank=True,
+    )
+
+    class Meta: 
+        db_table = 'ens_model_choice' 
+        verbose_name = "Ensemble Model Choice"
+        verbose_name_plural = "Ensemble Model Choices" 
+        # unique_together = ('station_id', 'date')
+
+    def __str__(self): 
+        return f"{self.model_name} for station {self.station_id} on {self.date.strftime('%Y-%m-%d')}"
+
+
+
+
