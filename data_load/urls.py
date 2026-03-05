@@ -249,6 +249,13 @@ urlpatterns = [
         name='district-alerts-update' 
     ),
 
+    path(
+        'v1/ens_model_choices_list/<int:station_id>/<str:date>/', 
+        views.EnsModelChoiceListAPI.as_view(), 
+        name='ens_model_choices_list'
+    ),
+
+
 
         # Endpoint for GET (listing all tasks)
     path('scheduled-tasks/', ScheduledTaskListView.as_view(), name='scheduled-task-list'),
@@ -278,4 +285,13 @@ urlpatterns = [
     path('flow-path/<str:lat>/<str:lng>',views.FlowPath,name='flow-path'),
     path('user-defined-basin/<str:lat>/<str:lng>',views.UserDefinedBasin,name='user-defined-basin'),
     path('sub-basin-precipitation/<str:lat>/<str:lng>',views.SubBasinPrecipiation,name='sub-basin-precipitation'),
+
+
+
+
+   # Endpoint for the full data
+    path('basin-wise-forecast/cumilla/latest/', views.get_latest_cumilla_forecast, name='cumilla_latest'),
+    
+    # Endpoint to see ONLY the date/metadata
+    path('bsin-wise-forecast/cumilla/info/', views.get_forecast_metadata, name='cumilla_info'),
 ]

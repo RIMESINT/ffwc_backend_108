@@ -4275,3 +4275,29 @@ def SubBasinPrecipiation(request,lat,lng):
 
     jsonResult = d[1]
     return Response(jsonResult)
+
+
+import json
+JSON_FILE_PATH = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast/latest_cumilla_forecast.json'
+
+def get_latest_cumilla_forecast(request):
+    """Returns the full JSON data from the latest run."""
+    if os.path.exists(JSON_FILE_PATH):
+        with open(JSON_FILE_PATH, 'r') as f:
+            data = json.load(f)
+        return JsonResponse(data)
+    return JsonResponse({"code": "error", "message": "No data available."}, status=404)
+
+def get_forecast_metadata(request):
+    """Returns only the forecast date and run time from the latest file."""
+    if os.path.exists(JSON_FILE_PATH):
+        with open(JSON_FILE_PATH, 'r') as f:
+            full_data = json.load(f)
+            
+        # Return only the relevant date info
+        return JsonResponse({
+            "code": "success",
+            "forecast_date": full_data['metadata']['forecast_date'],
+            "last_updated": full_data['metadata']['run_datetime']
+        })
+    return JsonResponse({"code": "error", "message": "No data available."}, status=404)

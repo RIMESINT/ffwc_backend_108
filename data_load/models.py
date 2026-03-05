@@ -761,9 +761,6 @@ class JsonEntry(models.Model):
         return f"JSON Entry ID: {entry_id}"
 
 
-
-
-
 """
     ################################################################
     ### Added by SHAIF | Date: 2025-AUG-19
