@@ -1,5 +1,6 @@
 from django.conf import settings
 from django.db import models
+from data_load.models import WaterLevelObservation
 
 
 
@@ -113,6 +114,10 @@ class WaterLevelInputForMobileUser(models.Model):
 
     # Note: kept the field name 'is_acepted' as requested (typo preserved).
     is_acepted = models.BooleanField(default=True)
+    is_approved = models.BooleanField(default=False)
+    is_rejected = models.BooleanField(default=False)
+    # approved_at = models.DateTimeField(null=True, blank=True)
+    # rejected_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         # db_table = 'waterwatch_waterlevel_input_for_mobile_user'
@@ -124,6 +129,52 @@ class WaterLevelInputForMobileUser(models.Model):
             models.Index(fields=['created_by'], name='idx_wli_created_by'),
         ]
         ordering = ('-observation_date',)
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+
+        old_intance = None
+        if self.pk:
+            try:
+                old_intance = WaterLevelInputForMobileUser.objects.get(pk=self.pk)
+            except WaterLevelInputForMobileUser.DoesNotExist:
+                old_intance = None
+
+        print("old_intance", old_intance, old_intance.is_approved, self.is_approved)
+
+        if self.is_approved:
+            station_id = self.station.station_id if hasattr(self.station, 'station_id') else self.station_id
+            
+            print("station_id", station_id)
+            print("observation_date", self.observation_date)
+            print("water_level", self.water_level)
+
+            observation, created = WaterLevelObservation.objects.get_or_create(
+                station_id_id=station_id,
+                observation_date=self.observation_date,
+                defaults={
+                    'water_level': -9999.00,
+                    'gauge_reader_water_level': self.water_level
+                }
+            )
+
+            print("observation", observation)
+            print("created", created)
+            
+            if not created:
+                observation.gauge_reader_water_level = self.water_level
+                observation.save(update_fields=['gauge_reader_water_level'])
+                
+        # If the record is rejected, clear the gauge_reader_water_level
+        elif not self._state.adding and self.is_rejected:
+            station_id = self.station.station_id if hasattr(self.station, 'station_id') else self.station_id
+            
+            WaterLevelObservation.objects.filter(
+                station_id_id=station_id,
+                observation_date=self.observation_date
+            ).update(
+                gauge_reader_water_level=None
+            )
 
     def __str__(self):
         station_val = getattr(self, 'station_id', None) or (self.station.station_id if self.station else '—')

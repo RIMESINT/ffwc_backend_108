@@ -252,6 +252,7 @@ class WaterLevelObservation(models.Model):
     station_id = models.ForeignKey(Station, to_field='station_id', on_delete=models.SET_NULL, blank=True, null=True)
     observation_date = models.DateTimeField()
     water_level = models.DecimalField(max_digits=10, decimal_places=2)
+    gauge_reader_water_level = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, default=None)
     # is_experimental = models.BooleanField(default=False)
 
     class Meta:

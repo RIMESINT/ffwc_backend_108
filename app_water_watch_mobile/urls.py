@@ -16,6 +16,7 @@ from app_water_watch_mobile.rf_level_input.views import (
 
 from app_water_watch_mobile.water_level_input_web.views import (
     WaterLevelInputListAPIView,
+    WaterLevelInputApproveRejectAPIView,
 )
 from app_water_watch_mobile.rf_level_input_web.views import (
     RFLevelInputListAPIView,
@@ -63,6 +64,11 @@ urlpatterns = [
         'v1/water_level_inputs_list_with_filter/',
         WaterLevelInputListAPIView.as_view(), 
         name='water_level_inputs_list_with_filter'
+    ),
+
+    path('v1/water_level_input_approve_reject/<int:pk>/',
+        WaterLevelInputApproveRejectAPIView.as_view(),
+        name='water_level_input_approve_reject'
     ),
     
     #####################################################################################

@@ -1,5 +1,7 @@
 # serializers.py
 from rest_framework import serializers
+from rest_framework.exceptions import APIException
+from rest_framework import status
 from app_water_watch_mobile.models import (
     WaterLevelInputForMobileUser,
 )
@@ -9,11 +11,8 @@ from data_load.models import (
 from app_user_mobile.models import (
     MobileAuthUser,
 )
-
-
-
-
-
+from utils.exceptions import CustomValidationError
+from data_load.models import WaterLevelObservation
 
 
 class StationSerializer(serializers.ModelSerializer):
@@ -45,6 +44,36 @@ class WaterLevelInputForMobileUserSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_by',
             'updated_at',
-            'is_acepted'
+            'is_acepted',
+            'is_approved',
+            'is_rejected',
         ]
         read_only_fields = ['created_at', 'updated_at']
+
+class WaterLevelInputApproveRejectSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WaterLevelInputForMobileUser
+        fields = [
+            'id',
+            'is_approved',
+            'is_rejected',
+            'observation_date',
+            'water_level',
+            'station'
+        ]
+        read_only_fields = ['id', 'observation_date', 'water_level', 'station']    
+
+    def validate(self, attrs):
+        if attrs.get('is_approved') and attrs.get('is_rejected'):
+            raise CustomValidationError(
+                "Approve and reject cannot be both True",
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
+            
+        # Only execute this logic if the record is being approved
+        if attrs.get('is_approved'):
+            # self.instance contains the existing WaterLevelInputForMobileUser record
+            station = self.instance.station
+            observation_date = self.instance.observation_date
+            water_level = self.instance.water_level
+        return attrs
