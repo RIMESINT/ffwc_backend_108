@@ -1,42 +1,15 @@
 from rest_framework import serializers
 
-from django.core.validators import MaxValueValidator, MinValueValidator
-
-#  import models
-from app_visualization.models import (
-    Source, 
-    SystemState,
-)
-
-# import MEDIA URL 
-
-
-
-
-
-
-
-
-
-
-
-### -------------------------------------------------------------------------------- ###
-### Serializer for SourceViewSet
-### -------------------------------------------------------------------------------- ###
-
 class ForcastStateDDReqSerializer(serializers.Serializer): 
-    parameter = serializers.IntegerField()  
-    source = serializers.IntegerField()  
-    forecast_date = serializers.CharField()  
-    # basin_details = serializers.ListField(child=serializers.IntegerField(), allow_empty=True)
+    # Use CharField for these to allow the View to parse them manually 
+    # since GET requests pass lists as multiple identical keys
+    parameter = serializers.CharField(required=False)  
+    source = serializers.IntegerField(required=True)  
+    forecast_date = serializers.CharField(required=True)  
+    
+    # Keeping this flexible as you are passing it as a string "[]" in the URL
+    basin_details = serializers.CharField(required=False, allow_blank=True)
 
-class ForcastDDResponseSerializer(serializers.ModelSerializer):
-    parameter = serializers.IntegerField()  
-    source = serializers.IntegerField()  
-    forecast_date = serializers.IntegerField()  
-    basin_details = serializers.ListField(child=serializers.IntegerField())
-
-    # class Meta:
-    #     model = SystemState
-    #     fields = ['id', 'name', 'source', 'last_update', 'updated_at']
-
+    def validate_parameter(self, value):
+        # This is a helper to ensure we handle single or multiple parameters
+        return value

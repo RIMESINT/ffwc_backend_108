@@ -16,6 +16,7 @@ from rest_framework.decorators import api_view,action
 from django.views.decorators.http import require_GET
 
 from . import models as models
+from data_load import models as data_load_models
 from . import serializers as serializers  # Import serializers module as 'serializer'
 from datetime import datetime,timedelta,time
 from collections import defaultdict
@@ -2906,6 +2907,75 @@ def BMDWRFMonsoonFlashFlood(request, **kwargs):
     return Response(response_data)
 
 
+@api_view(['GET'])
+def BMDWRFPreMonsoonFlashFlood(request, **kwargs):
+    """
+    Retrieves BMD WRF Pre-Monsoon flash flood forecast data.
+    Targets the 'Basin_Wise_Flash_Flood_Forecast' model.
+    """
+
+    requested_forecast_date_str = kwargs.get('forecast_date')
+    requested_basin_id = kwargs.get('basin_id')
+    
+    # Convert requested date string to date object
+    try:
+        requested_date = datetime.strptime(requested_forecast_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+    # --- 1. Query Data with Fallback Logic ---
+    
+    # A. Try requested date
+    forecasts = models.Basin_Wise_Flash_Flood_Forecast.objects.filter(
+        prediction_date=requested_date, 
+        basin_id=requested_basin_id
+    ).order_by('date', 'hours')
+
+    if not forecasts.exists():
+        # B. Fallback to latest available prediction_date for this basin
+        latest_record = models.Basin_Wise_Flash_Flood_Forecast.objects.filter(
+            basin_id=requested_basin_id
+        ).order_by('-prediction_date').first()
+        
+        if latest_record:
+            forecasts = models.Basin_Wise_Flash_Flood_Forecast.objects.filter(
+                prediction_date=latest_record.prediction_date, 
+                basin_id=requested_basin_id
+            ).order_by('date', 'hours')
+    
+    if not forecasts.exists():
+        return Response({
+            "error": f"No Pre-Monsoon data found for Basin {requested_basin_id}."
+        }, status=404)
+
+    # --- 2. Restructure Data ---
+    
+    response_data = {
+        "Hours": {
+            "0": 24, "1": 48, "2": 72, 
+            "3": 120, "4": 168, "5": 240
+        },
+        "Threshold": {},
+    }
+
+    threshold_list = []
+    date_value_dict = defaultdict(list)
+    
+    for forecast in forecasts:
+        threshold_list.append(forecast.thresholds)
+        date_value_dict[forecast.date].append(forecast.value)
+
+    # Populate unique thresholds (sorted to match hour indices)
+    unique_thresholds = sorted(list(set(threshold_list)))
+    response_data["Threshold"] = {str(i): round(t, 2) for i, t in enumerate(unique_thresholds)}
+  
+    # Populate date-wise value dictionaries
+    for key in sorted(date_value_dict.keys()):
+        string_date = key.strftime("%Y-%m-%d")
+        response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
+
+    return Response(response_data)
+    
 
 
 @api_view(['GET'])
@@ -2960,6 +3030,181 @@ def UkMetMonsoonFlashFlood(request,**kwargs):
         response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
 
     return Response(response_data)
+
+
+@api_view(['GET'])
+def UkMetPreMonsoonFlashFlood(request, **kwargs):
+    forecast_date = kwargs['forecast_date']
+    basin_id = kwargs['basin_id']
+
+    # Try to find the latest available prediction date in the database as a fallback
+    try:
+        latest_record = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.latest('prediction_date')
+        latest_date = latest_record.prediction_date
+    except models.UKMetPreMonsoonBasinWiseFlashFloodForecast.DoesNotExist:
+        return Response({"error": "No data available in database"}, status=404)
+
+    # Check if data exists for the requested date
+    first_query = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+        prediction_date=forecast_date, 
+        basin_id=basin_id
+    ).order_by('date', 'hours')
+    
+    if not first_query.exists():
+        # Fallback to the latest available data
+        forecast_date = latest_date
+        forecasts = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+            prediction_date=forecast_date, 
+            basin_id=basin_id
+        ).order_by('date', 'hours')
+    else:
+        forecasts = first_query
+
+    # Initialize the response structure
+    response_data = {
+        "Hours": {
+            "0": 24,
+            "1": 48,
+            "2": 72,
+            "3": 120,
+            "4": 168,
+            "5": 240
+        },
+        "Threshold": {},
+    }
+
+    threshold_list = []
+    date_value_dict = defaultdict(list)
+
+    # Populate the data from the database
+    for forecast in forecasts:
+        # We collect unique thresholds to build the threshold map
+        # Note: Using set ensures uniqueness, sorted ensures they match the hour indices
+        threshold_list.append(forecast.thresholds)
+        date_value_dict[forecast.date].append(forecast.value)
+ 
+    # Build Threshold dictionary (mapping index to threshold value)
+    # Using sorted(list(set(...))) ensures 0: smallest threshold (24h), 5: largest (240h)
+    unique_thresholds = sorted(list(set(threshold_list)))
+    response_data["Threshold"] = {str(i): t for i, t in enumerate(unique_thresholds)}
+  
+    # Build Date dictionaries
+    for key in sorted(date_value_dict.keys()):
+        string_date = key.strftime("%Y-%m-%d")
+        response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
+
+    return Response(response_data)
+
+
+# View for Premonsoon deterministic flash flood
+@api_view(['GET'])
+def NewFlashFlood(request,**kwargs):
+
+    forecast_date = kwargs['forecast_date']
+    basin_id = kwargs['basin_id']
+
+    latest_record = data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.latest('prediction_date')
+    latest_date = latest_record.prediction_date  # Access the date field
+
+    first_query =  data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+    
+    if not first_query.exists():
+        forecast_date = latest_date
+        second_query =  data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+        forecasts = second_query
+    else:
+        forecasts = first_query
+
+
+    # Initialize the response structure
+    response_data = {
+
+        "Hours": {
+            "0": 24,
+            "1": 48,
+            "2": 72,
+            "3": 120,
+            "4": 168,
+            "5": 240
+        },
+
+        "Threshold": defaultdict(float),
+    }
+
+    threshold_list=[]
+
+    date_value_dict = defaultdict(list)
+    # Populate the response data with values from the database
+    for forecast in forecasts:
+        threshold_list.append(forecast.thresholds)
+        date_value_dict[forecast.date].append(forecast.value)
+ 
+    # Convert defaultdict to regular dict
+    threshold_dict={}
+    for i,threshold in enumerate(sorted(set(threshold_list))):threshold_dict[str(i)]=threshold
+    response_data["Threshold"] = threshold_dict
+  
+    for key in date_value_dict.keys():
+        string_date = key.strftime("%Y-%m-%d")
+        response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
+
+    return Response(response_data)
+
+
+# View for Premonsoon Probabilistic flash flood
+@api_view(['GET'])
+def NewProbabilisticFlashFlood(request,**kwargs):
+
+    forecast_date = kwargs['givenDate']
+    basin_id = kwargs['basin_id']
+
+    latest_record = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.latest('prediction_date')
+    latest_date = latest_record.prediction_date  # Access the date field
+
+    first_query =  data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+    
+    if not first_query.exists():
+        forecast_date = latest_date
+        second_query =  data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+        forecasts = second_query
+    else:
+        forecasts = first_query
+
+
+    # Initialize the response structure
+    response_data = {
+
+        "Hours": {
+            "0": 24,
+            "1": 48,
+            "2": 72,
+            "3": 120,
+            "4": 168,
+            "5": 240
+        },
+
+        "Thresholds": defaultdict(float),
+    }
+
+    threshold_list=[]
+
+    date_value_dict = defaultdict(list)
+    # Populate the response data with values from the database
+    for forecast in forecasts:
+        threshold_list.append(forecast.thresholds)
+        date_value_dict[forecast.date].append(forecast.value)
+ 
+    # Convert defaultdict to regular dict
+    threshold_dict={}
+    for i,threshold in enumerate(sorted(set(threshold_list))):threshold_dict[str(i)]=threshold
+    response_data["Thresholds"] = threshold_dict
+  
+    for key in list(date_value_dict.keys())[:-1]:
+        string_date = key.strftime("%Y-%m-%d")
+        response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
+
+    return Response(response_data)
+
 
 @api_view(['GET'])
 def MonsoonProbabilisticFlashFlood(request,**kwargs):
@@ -3067,6 +3312,69 @@ def UKMetMonsoonProbabilisticFlashFlood(request,**kwargs):
 
     return Response(response_data)
 
+
+@api_view(['GET'])
+def UKMetPreMonsoonProbabilisticFlashFlood(request, **kwargs):
+    forecast_date = kwargs['givenDate']
+    basin_id = kwargs['basin_id']
+
+    # 1. Handle Fallback Logic
+    try:
+        latest_record = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.latest('prediction_date')
+        latest_date = latest_record.prediction_date
+    except models.UKMetPreMonsoonProbabilisticFlashFloodForecast.DoesNotExist:
+        return Response({"error": "No Pre-Monsoon probabilistic data found in database."}, status=404)
+
+    # Attempt to get the requested date
+    first_query = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.filter(
+        prediction_date=forecast_date, 
+        basin_id=basin_id
+    ).order_by('date', 'hours')
+    
+    if not first_query.exists():
+        forecast_date = latest_date
+        forecasts = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.filter(
+            prediction_date=forecast_date, 
+            basin_id=basin_id
+        ).order_by('date', 'hours')
+    else:
+        forecasts = first_query
+
+    # 2. Initialize the Response Structure
+    response_data = {
+        "Hours": {
+            "0": 24,
+            "1": 48,
+            "2": 72,
+            "3": 120,
+            "4": 168,
+            "5": 240
+        },
+        "Thresholds": {},
+    }
+
+    threshold_list = []
+    date_value_dict = defaultdict(list)
+
+    # 3. Populate Data from Database
+    for forecast in forecasts:
+        threshold_list.append(forecast.thresholds)
+        date_value_dict[forecast.date].append(forecast.value)
+ 
+    # Standardize Threshold mapping (Index 0 = lowest threshold, Index 5 = highest)
+    unique_thresholds = sorted(list(set(threshold_list)))
+    response_data["Thresholds"] = {str(i): t for i, t in enumerate(unique_thresholds)}
+  
+    # Build date-wise probability maps
+    # Note: I used the full list here. If you specifically need to exclude the last day 
+    # (as in your example [:-1]), you can keep that slice.
+    sorted_dates = sorted(date_value_dict.keys())
+    for key in sorted_dates:
+        string_date = key.strftime("%Y-%m-%d")
+        response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
+
+    return Response(response_data)
+    
 
 
 from data_load.models import FloodSummaryReport
@@ -4277,16 +4585,57 @@ def SubBasinPrecipiation(request,lat,lng):
     return Response(jsonResult)
 
 
-import json
-JSON_FILE_PATH = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast/latest_cumilla_forecast.json'
+# import json
+# JSON_FILE_PATH = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast/latest_cumilla_forecast.json'
 
-def get_latest_cumilla_forecast(request):
-    """Returns the full JSON data from the latest run."""
-    if os.path.exists(JSON_FILE_PATH):
-        with open(JSON_FILE_PATH, 'r') as f:
-            data = json.load(f)
+# def get_latest_cumilla_forecast(request):
+#     """Returns the full JSON data from the latest run."""
+#     if os.path.exists(JSON_FILE_PATH):
+#         with open(JSON_FILE_PATH, 'r') as f:
+#             data = json.load(f)
+#         return JsonResponse(data)
+#     return JsonResponse({"code": "error", "message": "No data available."}, status=404)
+
+
+import json
+# Base directory for all forecast JSONs
+FORECAST_ASSETS_DIR = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast'
+
+def get_json_data(filename):
+    """Helper function to read JSON files from the assets directory."""
+    file_path = os.path.join(FORECAST_ASSETS_DIR, filename)
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    return None
+
+# --- Amalshid View ---
+def get_latest_amalshid_forecast(request):
+    data = get_json_data('latest_amalshid_forecast.json')
+    if data:
         return JsonResponse(data)
-    return JsonResponse({"code": "error", "message": "No data available."}, status=404)
+    return JsonResponse({"code": "error", "message": "Amalshid data not available."}, status=404)
+
+# --- Sylhet View ---
+def get_latest_sylhet_forecast(request):
+    data = get_json_data('latest_sylhet_forecast.json')
+    if data:
+        return JsonResponse(data)
+    return JsonResponse({"code": "error", "message": "Sylhet data not available."}, status=404)
+
+# --- Sunamganj View ---
+def get_latest_sunamganj_forecast(request):
+    data = get_json_data('latest_sunamganj_forecast.json')
+    if data:
+        return JsonResponse(data)
+    return JsonResponse({"code": "error", "message": "Sunamganj data not available."}, status=404)
+
+# --- Original Cumilla View (Updated for consistency) ---
+def get_latest_cumilla_forecast(request):
+    data = get_json_data('latest_cumilla_forecast.json')
+    if data:
+        return JsonResponse(data)
+    return JsonResponse({"code": "error", "message": "Cumilla data not available."}, status=404)
 
 def get_forecast_metadata(request):
     """Returns only the forecast date and run time from the latest file."""

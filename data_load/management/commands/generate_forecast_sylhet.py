@@ -1,0 +1,119 @@
+import os
+import json
+import pandas as pd
+import paramiko
+import re
+from datetime import datetime
+from django.core.management.base import BaseCommand
+
+class Command(BaseCommand):
+    help = 'Scan available folders for Sylhet, fetch the most recent valid forecast, and filter out historical data'
+
+    def handle(self, *args, **options):
+        # 1. Setup
+        run_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        REMOTE_HOST = '203.156.108.111'
+        REMOTE_USER = 'mmb'
+        REMOTE_PASS = 'mmb!@#$'
+
+        # Base directory and filename for Sylhet
+        remote_base_dir = '/home/mmb/Tank/outputs_corrected/sylhet/csv/'
+        target_filename = 'all_en_sylhet_corr.csv'
+        
+        # Local paths
+        base_assets = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast'
+        os.makedirs(base_assets, exist_ok=True)
+        local_json_path = os.path.join(base_assets, 'latest_sylhet_forecast.json')
+
+        try:
+            # 2. SSH Connection
+            ssh = paramiko.SSHClient()
+            ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+            ssh.connect(REMOTE_HOST, username=REMOTE_USER, password=REMOTE_PASS)
+            sftp = ssh.open_sftp()
+
+            # 3. Detect the Latest Valid Folder
+            self.stdout.write("Scanning Sylhet remote directories...")
+            all_entries = sftp.listdir(remote_base_dir)
+            
+            # Filter for YYYYMMDD folders and sort descending (newest first)
+            date_folders = sorted([f for f in all_entries if re.match(r'^\d{8}$', f)], reverse=True)
+            
+            if not date_folders:
+                raise Exception(f"No valid date folders found in {remote_base_dir}")
+
+            remote_file_path = None
+            final_date_folder = None
+
+            # 4. Loop back through folders until the CSV is found
+            for folder in date_folders:
+                candidate_path = f"{remote_base_dir}{folder}/{target_filename}"
+                try:
+                    sftp.stat(candidate_path)  # Verify file exists
+                    remote_file_path = candidate_path
+                    final_date_folder = folder
+                    self.stdout.write(self.style.SUCCESS(f"Valid data found in folder: {folder}"))
+                    break
+                except IOError:
+                    self.stdout.write(f"Folder {folder} exists, but {target_filename} is missing. Trying previous day...")
+
+            if not remote_file_path:
+                raise Exception(f"Searched {len(date_folders)} folders but could not find {target_filename}.")
+
+            # 5. Download the file
+            temp_csv = f'/tmp/latest_sylhet_temp.csv'
+            sftp.get(remote_file_path, temp_csv)
+            sftp.close()
+            ssh.close()
+
+            # 6. Data Processing & Filtering
+            df = pd.read_csv(temp_csv)
+            
+            # Identify time column (Time or Date)
+            time_col = 'Time' if 'Time' in df.columns else 'Date'
+            df[time_col] = pd.to_datetime(df[time_col])
+            
+            # --- FILTERING LOGIC ---
+            # Set the threshold to the date of the folder found (e.g., 20260318 -> 2026-03-18)
+            forecast_start_threshold = pd.to_datetime(final_date_folder, format='%Y%m%d')
+            
+            # Filter to remove data before the forecast run date (removes 2016-2025 rows)
+            df = df[df[time_col] >= forecast_start_threshold].copy()
+            # --- END FILTERING LOGIC ---
+
+            # Format time back to string for the JSON response
+            df[time_col] = df[time_col].dt.strftime('%Y-%m-%d %H:%M:%S')
+            ensemble_cols = [col for col in df.columns if col.startswith('EN#')]
+            
+            # Calculate Percentiles (Q.25, Med, Q.75)
+            p25 = df[ensemble_cols].quantile(0.25, axis=1).round(3).tolist()
+            p50 = df[ensemble_cols].quantile(0.50, axis=1).round(3).tolist()
+            p75 = df[ensemble_cols].quantile(0.75, axis=1).round(3).tolist()
+
+            # 7. Construct JSON Structure
+            output_data = {
+                "metadata": {
+                    "station_id": 'SW267',
+                    "basin_name": "Surma River (Sylhet)",
+                    "forecast_date": final_date_folder,
+                    "run_datetime": run_datetime,
+                    "dc_unit": "m³/s",
+                    "pb_unit": "%"
+                },
+                "data": {
+                    "date": df[time_col].tolist(),
+                    "25%": p25,
+                    "50%": p50,
+                    "75%": p75
+                }
+            }
+
+            # 8. Save/Overwrite the JSON file
+            with open(local_json_path, 'w') as f:
+                json.dump(output_data, f, indent=2)
+
+            self.stdout.write(self.style.SUCCESS(f'Successfully updated latest_sylhet_forecast.json from folder {final_date_folder}'))
+
+        except Exception as e:
+            self.stderr.write(self.style.ERROR(f'Error processing Sylhet: {str(e)}'))

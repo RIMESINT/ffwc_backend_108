@@ -374,6 +374,38 @@ class ThresholdBasins(models.Model):
     def __str__(self):
         return self.basin_name
 
+
+# Models for Pre-Monsoon Diterministic Flash Flood
+
+class Basin_Wise_Flash_Flood_Forecast(models.Model):
+
+    prediction_date = models.DateField()
+    basin_id = models.IntegerField()
+    date = models.DateField()
+    hours = models.IntegerField()
+    thresholds = models.FloatField()
+    value = models.FloatField()
+
+    def __str__(self):
+        return self.name
+
+# Models for Pre-Monsoon Probabilistic Flash Flood
+class Probabilistic_Flash_Flood_Forecast(models.Model):
+    prediction_date = models.DateField()
+    basin_id = models.IntegerField()
+    date = models.DateField()
+    hours = models.IntegerField()
+    thresholds = models.FloatField()
+    value = models.FloatField()
+
+    def __str__(self):
+        return self.name
+
+    # class Meta:
+    #     managed = False
+    #     db_table = 'data_load_probabilistic_flash_flood_forecast'
+
+
 class UKMetMonsoonBasinWiseFlashFloodForecast(models.Model):
     prediction_date = models.DateField()
     basin_id = models.IntegerField()
@@ -389,6 +421,20 @@ class UKMetMonsoonBasinWiseFlashFloodForecast(models.Model):
     def __str__(self):
         return f"Basin {self.basin_id} - {self.hours} hours"
 
+class UKMetPreMonsoonBasinWiseFlashFloodForecast(models.Model):
+    prediction_date = models.DateField()
+    basin_id = models.IntegerField()
+    date = models.DateField()
+    hours = models.IntegerField()
+    thresholds = models.FloatField()
+    value = models.FloatField()
+
+    class Meta:
+        db_table = 'ukmet_pre_monsoon_basin_wise_flash_flood_forecast'
+        managed = True
+
+    def __str__(self):
+        return f"Basin {self.basin_id} - {self.hours} hours (Pre-Monsoon)"
 
 class BMDWRFMonsoonBasinWiseFlashFloodForecast(models.Model):
     prediction_date = models.DateField()
@@ -420,6 +466,20 @@ class MonsoonBasinWiseFlashFloodForecast(models.Model):
     def __str__(self):
         return f"Basin {self.basin_id} - {self.hours} hours"
 
+class ECMWF_1_PreMonsoonBasinWiseFlashFloodForecast(models.Model):
+    prediction_date = models.DateField()
+    basin_id = models.IntegerField()
+    date = models.DateField()
+    hours = models.IntegerField()
+    thresholds = models.FloatField()
+    value = models.FloatField()
+
+    class Meta:
+        db_table = 'ecmwf_1_pre_monsoon_basin_wise_flash_flood_forecast'
+        managed = True
+
+    def __str__(self):
+        return f"Basin {self.basin_id} - {self.hours} hours"
 
 class MonsoonProbabilisticFlashFloodForecast(models.Model):
     prediction_date = models.DateField()
@@ -451,6 +511,21 @@ class UKMetMonsoonProbabilisticFlashFloodForecast(models.Model):
     def __str__(self):
         return f"Basin {self.basin_id} - {self.hours} hours"
 
+class UKMetPreMonsoonProbabilisticFlashFloodForecast(models.Model):
+    prediction_date = models.DateField()
+    basin_id = models.IntegerField()
+    date = models.DateField()
+    hours = models.IntegerField()
+    thresholds = models.FloatField()
+    value = models.FloatField()
+
+    class Meta:
+        db_table = 'ukmet_pre_monsoon_probabilistic_flash_flood_forecast'
+        managed = True
+
+    def __str__(self):
+        return f"Basin {self.basin_id} - {self.hours} hours (Pre-Monsoon Prob)"
+        
 
 from django.core.serializers.json import DjangoJSONEncoder
 class FloodReport(models.Model):
