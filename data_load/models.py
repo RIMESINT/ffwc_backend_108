@@ -450,7 +450,22 @@ class BMDWRFMonsoonBasinWiseFlashFloodForecast(models.Model):
 
     def __str__(self):
         return f"Basin {self.basin_id} - {self.hours} hours"
-        
+
+class BMDWRFPreMonsoonBasinWiseFlashFloodForecast(models.Model):
+    prediction_date = models.DateField()
+    basin_id = models.IntegerField()
+    date = models.DateField()
+    hours = models.IntegerField()
+    thresholds = models.FloatField()
+    value = models.FloatField()
+
+    class Meta:
+        db_table = 'bmd_wrf_pre_monsoon_basin_wise_flash_flood_forecast'
+        managed = True
+
+    def __str__(self):
+        return f"Pre-Monsoon Basin {self.basin_id} - {self.hours} hours"
+          
 class MonsoonBasinWiseFlashFloodForecast(models.Model):
     prediction_date = models.DateField()
     basin_id = models.IntegerField()

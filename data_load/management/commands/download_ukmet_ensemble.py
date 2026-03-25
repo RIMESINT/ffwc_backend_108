@@ -13,7 +13,7 @@ class Command(BaseCommand):
         # 1. Determine Date
         date_input = options['date']
         if not date_input:
-            dt_obj = datetime.today()
+            dt_obj = datetime.today() - timedelta(days=0)
         else:
             try:
                 if "-" in date_input:

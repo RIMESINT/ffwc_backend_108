@@ -11,41 +11,30 @@ from datetime import datetime as dt, timedelta as delt
 from scipy.ndimage import zoom
 from tqdm import tqdm
 
-from app_visualization.models import (
-    Source, SystemState
-)
-
-# Use your project's constant settings
 from ffwc_django_project.project_constant import app_visualization
+from app_visualization.models import Source, SystemState
 
 SOURCE_NAME = 'UKMET_DETERMINISTIC_VIS'
 SYSTEM_STATE_NAME = app_visualization['system_state_name'][12]
 
 class Command(BaseCommand):
-    help = 'Generate geojson and svg visualization for UKMET Deterministic Forecast'
+    help = 'Generate geojson and svg colorbar legends for UKMET Deterministic Forecast'
 
     def add_arguments(self, parser):
         parser.add_argument('fdate', nargs='?', type=str, help='Date in YYYYMMDD format')
 
     def update_state(self, forecast_date, source_obj):
-        state, created = SystemState.objects.update_or_create(
+        SystemState.objects.update_or_create(
             source=source_obj, 
             name=SYSTEM_STATE_NAME,
             defaults={'last_update': forecast_date}
         )
-        if created:
-            print(f"Created new SystemState for {SOURCE_NAME}")
-        else:
-            print(f"Updated existing SystemState for {SOURCE_NAME}")
 
     def handle(self, *args, **kwargs):
         fdate = kwargs['fdate']
         if fdate is None:
             fdate = dt.now().strftime('%Y%m%d')
         
-        print(f"### Generating UKMET Visualization for date: {fdate}")
-
-        # 1. Get Source Configuration
         try:
             source_obj = Source.objects.get(
                 name=SOURCE_NAME, 
@@ -53,106 +42,141 @@ class Command(BaseCommand):
                 source_data_type__name="Forecast"
             )
         except Exception as e:
-            self.stderr.write(f"Source {SOURCE_NAME} not found in database: {e}")
+            self.stderr.write(f"Source {SOURCE_NAME} not found: {e}")
             return
 
-        # 2. Setup Paths
-        # New requested path
+        # Setup Paths
         ncfile = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_det_data/precip_{fdate}.nc"
-        
-        # Output directory using destination_path from DB
         json_out_rel = source_obj.destination_path
         forecast_out_dir = os.path.join(settings.BASE_DIR, json_out_rel.strip('/'), fdate)
         
-        print(f"Input file: {ncfile}")
-        print(f"Output dir: {forecast_out_dir}")
-
         if not os.path.exists(ncfile):
-            self.stderr.write(f"NetCDF file not found: {ncfile}")
+            self.stderr.write(f"File not found: {ncfile}")
             return
 
         if not os.path.exists(forecast_out_dir):
             os.makedirs(forecast_out_dir)
 
-        # 3. Visualization Styling (Rainfall)
+        # Visualization Styling
         rf_colors = ['#00DC00', '#A0E632', '#E6DC32', '#E6AF2D', '#F08228', '#FA3C3C', '#F00082']
         rf_levels = [1, 10, 20, 40, 80, 160, 250, 1000]
         bmd_pr_dly_cmap = mplcolors.ListedColormap(rf_colors)
         norm = mplcolors.BoundaryNorm(rf_levels, bmd_pr_dly_cmap.N)
 
-        # 4. Read NetCDF
+        # Read NetCDF
         nf = nco(ncfile, 'r')
-        
-        # Based on inspection: coordinates are 'latitude' and 'longitude'
         lat = nf.variables['latitude'][:]
         lon = nf.variables['longitude'][:]
         time_var = nf.variables['time']
-        dates = num2date(time_var[:], time_var.units, time_var.calendar)
-        
-        # Deterministic rainfall variable is 'tp' (Total Precipitation)
+        # Valid dates (usually representing the end of the rainfall accumulation)
+        dates_raw = num2date(time_var[:], time_var.units, time_var.calendar)
         rf = nf.variables['tp'][:] 
 
         finfo = {
             'fdate'  : fdate,
             'rf'     : [],
+            'tmin'   : [],
+            'tmax'   : [],
+            'rh'     : [],
+            'ws'     : [],
+            'cldflo' : [],
+            'thi_min': [],
+            'thi_max': []
         }
 
-        # 5. Process loop (7 days available in UKMET file)
-        # Note: Start step and end step are 1:1 since UKMET NC is usually daily aggregated
-        for day in tqdm(range(len(dates)), desc="Generating Map Layers"):
+        for day in tqdm(range(len(dates_raw)), desc="Processing UKMET Map Layers"):
+            # logic: The NetCDF date is the 'End' of the accumulation.
+            # We subtract 1 day to get the 'Start' of that accumulation period.
+            valid_end_dt = dates_raw[day]
+            valid_start_dt = valid_end_dt - delt(days=1)
             
-            current_date_obj = dates[day]
-            start_time = current_date_obj.strftime('%Y%m%d')
-            start_time_bst = current_date_obj.strftime('%Y-%m-%d')
+            # Formatting for filenames (e.g., S_2026032500.E_2026032600)
+            start_f = valid_start_dt.strftime('%Y%m%d00')
+            end_f   = valid_end_dt.strftime('%Y%m%d00')
             
-            # File naming conventions
-            json_suffix = f'.F_{fdate}.S_{start_time}.E_{start_time}.geojson'
-            cmap_suffix = f'.F_{fdate}.S_{start_time}.E_{start_time}.svg'
+            # Formatting for JSON (e.g., 2026-03-25 06:00)
+            start_bst = valid_start_dt.strftime('%Y-%m-%d 06:00')
+            end_bst   = valid_end_dt.strftime('%Y-%m-%d 06:00')
 
-            # Get 2D slice for the specific day
+            json_suffix = f'.F_{fdate}.S_{start_f}.E_{end_f}.geojson'
+            cmap_suffix = f'.F_{fdate}.S_{start_f}.E_{end_f}.svg'
+
             rf_d = rf[day, :, :]
 
-            # Visualization Setup
-            fig = pl.figure()
-            ax = fig.add_axes([0, 0, 1, 1])
-            ax.axis('off')
+            # --- 1. Generate GeoJSON Map Layer ---
+            # Create a hidden figure for the contour data
+            fig_map = pl.figure()
+            ax_map = fig_map.add_axes([0, 0, 1, 1])
+            ax_map.axis('off')
             
-            # Contour plot for GeoJSON and SVG
-            # zoom(..., 4) is used for smoothing high-res data for the web map
-            rf_cont_plot = ax.contourf(
-                zoom(lon, 2), zoom(lat, 2), zoom(rf_d, 2), 
+            rf_cont_plot = ax_map.contourf(
+                zoom(lon, 4), zoom(lat, 4), zoom(rf_d, 4), 
                 levels=rf_levels, 
                 cmap=bmd_pr_dly_cmap, 
                 norm=norm,
                 extend='max'
             )
 
-            # Export to GeoJSON
             rf_geojson = gj.contourf_to_geojson(rf_cont_plot)
             with open(os.path.join(forecast_out_dir, f'rf{json_suffix}'), 'w') as jfw:
                 jfw.write(rf_geojson)
+            pl.close(fig_map)
 
-            # Export to SVG (Cmap)
+            # --- 2. Generate SVG Legend (BMD Style) - Adjusted to be bigger ---
+            # Establish explicit standard physical size (e.g., 16 inches wide).
+            # Default is roughly (6.4x4.8). Combined with tight bbox, 
+            # setting explicitly larger figsize makes output SVG much larger.
+            fig_leg = pl.figure(figsize=(16, 6))
+            ax_leg = fig_leg.add_subplot(111)
+
+            # Standard contour plot logic (used purely to base colorbar on)
+            rf_leg_plot = ax_leg.contourf(
+                zoom(lon, 2), zoom(lat, 2), zoom(rf_d, 2), 
+                levels=rf_levels, 
+                cmap=bmd_pr_dly_cmap, 
+                norm=norm,
+                extend='max'
+            )
+            
+            # Create the horizontal colorbar
+            cbar = fig_leg.colorbar(
+                rf_leg_plot, 
+                orientation='horizontal', 
+                ticks=rf_levels[:-1],
+                ax=ax_leg # specific axes to put colorbar against
+            )
+            
+            # Increase fontsize of tick labels to match larger scale
+            cbar.set_ticklabels(
+                ['1', '10', '20', '40', '80', '160', '250'], 
+                fontsize=16 # Standard BMD visualization fontsize for larger visual
+            )
+            cbar.outline.set_visible(False)
+            
+            # Hide the contour map axis completely, leaving only the colorbar
+            ax_leg.axis('off')
+            ax_leg.set_visible(False)
+            
+            # Save the colorbar figure as SVG with tight bounding box
             pl.savefig(
                 os.path.join(forecast_out_dir, f'rf{cmap_suffix}'), 
                 transparent=True, 
                 pad_inches=0, 
-                bbox_inches='tight'
+                bbox_inches='tight' 
             )
-            pl.close(fig)
+            pl.close(fig_leg)
         
             finfo['rf'].append({
                 'file'  : f'rf{json_suffix}',
                 'cmap'  : f'rf{cmap_suffix}',
-                'start' : start_time_bst,
-                'end'   : start_time_bst, # Same day end since it's a daily slice
+                'start' : start_bst,
+                'end'   : end_bst,
             })
 
-        # 6. Save Info JSON
+        # Save Info JSON
         with open(os.path.join(forecast_out_dir, f'info.{fdate}.json'), 'w') as infojw:
-            json.dump(finfo, infojw)
+            json.dump(finfo, infojw, indent=2)
             
-        # 7. Update System State
-        date_obj = dt.strptime(fdate, '%Y%m%d')
-        self.update_state(date_obj, source_obj)
+        # Update System State
+        self.update_state(dt.strptime(fdate, '%Y%m%d'), source_obj)
         nf.close()

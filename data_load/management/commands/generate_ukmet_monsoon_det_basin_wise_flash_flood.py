@@ -120,23 +120,29 @@ class Command(BaseCommand):
         return daily_precip
 
     def calculate_flash_flood_forecast(self, combined_rainfall, thresholds, given_date):
-        if not combined_rainfall: return {}
-        
-        forecast_start_date = pd.to_datetime(given_date)
-        all_dates = sorted(pd.to_datetime(list(combined_rainfall.keys())))
-        process_dates = [d for d in all_dates if d >= forecast_start_date]
-        
-        results = {}
-        for p_date in process_dates:
-            cum_vals = {}
-            for idx, (hour, _) in thresholds.items():
-                days = int(hour / 24)
-                sum_range = [p_date - timedelta(days=i) for i in range(days)]
-                daily_sum = sum(combined_rainfall.get(d.strftime('%Y-%m-%d'), 0) for d in sum_range)
-                cum_vals[idx] = round(daily_sum, 2)
-            results[p_date.strftime('%Y-%m-%d')] = cum_vals
+            if not combined_rainfall: return {}
+            
+            # FIX: Create a fixed 10-day range starting from the actual Run Date
+            forecast_start_date = pd.to_datetime(given_date)
+            process_dates = [forecast_start_date + timedelta(days=i) for i in range(10)]
+            
+            results = {}
+            for p_date in process_dates:
+                date_str = p_date.strftime('%Y-%m-%d')
+                cum_vals = {}
+                for idx, (hour, _) in thresholds.items():
+                    days = int(hour / 24)
+                    # Sum backward from the current loop date
+                    sum_range = [p_date - timedelta(days=i) for i in range(days)]
+                    
+                    # This will correctly use observed rainfall for "Today" 
+                    # and forecast rainfall for future dates
+                    daily_sum = sum(combined_rainfall.get(d.strftime('%Y-%m-%d'), 0) for d in sum_range)
+                    cum_vals[idx] = round(daily_sum, 2)
+                
+                results[date_str] = cum_vals
 
-        return results
+            return results
 
     def save_to_database(self, results, prediction_date, basin_id):
         rows = []

@@ -11,36 +11,36 @@ from xarray import SerializationWarning
 from django.core.management import BaseCommand
 from django.conf import settings
 
-# Pointing to the pre-monsoon model
-from data_load.models import Basin_Wise_Flash_Flood_Forecast
+# --- Model Import ---
+from data_load.models import BMDWRFPreMonsoonBasinWiseFlashFloodForecast
 
-# Suppress the WRF-specific reference date warnings
 warnings.filterwarnings("ignore", category=SerializationWarning, module='xarray.coding.times')
 
-# --- Pre-Monsoon Static Configuration ---
-STATION_DICT = { 
-    1:'khaliajhuri', 2:'gowainghat', 3:'dharmapasha', 4:'userbasin',
-    5:'laurergarh', 6:'muslimpur', 7:'debidwar', 8:'ballah',
-    9:'habiganj', 10:'parshuram', 11:'cumilla', 12:'nakuagaon'
+# --- Updated Static Configuration ---
+STATION_DICT = {
+    1: 'khaliajhuri', 2: 'gowainghat', 3: 'dharmapasha', 4: 'userbasin',
+    5: 'laurergarh', 6: 'muslimpur', 7: 'debidwar', 8: 'ballah',
+    9: 'habiganj', 10: 'parshuram', 11: 'cumilla', 12: 'nakuagaon'
 }
 
+# --- Updated Thresholds (Formatted for Calculation Logic) ---
 STATION_THRESHOLDS_LIST = {
-    1: {0:[24,51.45], 1:[48,77.5], 2:[72,98.3], 3:[120,133], 4:[168,162], 5:[240,200]},
-    2: {0:[24,24.5], 1:[48,41.5], 2:[72,56.5], 3:[120,83], 4:[168,107.5], 5:[240,141]},
-    3: {0:[24,24.5], 1:[48,41.5], 2:[72,56.5], 3:[120,83], 4:[168,107.5], 5:[240,141]},
-    4: {0:[24,25], 1:[48,40.5], 2:[72,53.5], 3:[120,76], 4:[168,96], 5:[240,123]},
-    5: {0:[24,34], 1:[48,46.3], 2:[72,55.4], 3:[120,69.37], 4:[168,80.5], 5:[240,94]},
-    6: {0:[24,33.50], 1:[48,51.84], 2:[72,66.93], 3:[120,92.34], 4:[168,114.14], 5:[240,142.90]},
-    7: {0:[24,54], 1:[48,87], 2:[72,115], 3:[120,164], 4:[168,207], 5:[240,264]},
-    8: {0:[24,15], 1:[48,26], 2:[72,35], 3:[120,52], 4:[168,68], 5:[240,90]},
-    9: {0:[24,14], 1:[48,22], 2:[72,30], 3:[120,44], 4:[168,56], 5:[240,73]},
-    10: {0:[24,17], 1:[48,29], 2:[72,39], 3:[120,58], 4:[168,75], 5:[240,99]},
-    11: {0:[24,32], 1:[48,49], 2:[72,63], 3:[120,87], 4:[168,108], 5:[240,135]},
-    12: {0: [24, 30.52], 1: [48, 40.46], 2: [72, 47.73], 3: [120, 58.75], 4: [168, 67.37], 5: [240, 77.89]}
+    1: {0: [24, 51.45], 1: [48, 77.5], 2: [72, 98.3], 3: [120, 133.0], 4: [168, 162.0], 5: [240, 200.0]},
+    2: {0: [24, 25.0], 1: [48, 41.5], 2: [72, 56.5], 3: [120, 83.0], 4: [168, 107.5], 5: [240, 141.0]},
+    3: {0: [24, 24.5], 1: [48, 41.5], 2: [72, 56.5], 3: [120, 83.0], 4: [168, 107.5], 5: [240, 141.0]},
+    4: {0: [24, 25.0], 1: [48, 40.5], 2: [72, 53.5], 3: [120, 76.0], 4: [168, 96.0], 5: [240, 123.0]},
+    5: {0: [24, 34.0], 1: [48, 46.3], 2: [72, 55.4], 3: [120, 69.37], 4: [168, 80.5], 5: [240, 94.0]},
+    6: {0: [24, 33.50], 1: [48, 51.84], 2: [72, 66.93], 3: [120, 92.34], 4: [168, 114.14], 5: [240, 142.90]},
+    7: {0: [24, 54.0], 1: [48, 87.0], 2: [72, 115.0], 3: [120, 164.0], 4: [168, 207.0], 5: [240, 264.0]},
+    8: {0: [24, 15.0], 1: [48, 26.0], 2: [72, 35.0], 3: [120, 52.0], 4: [168, 68.0], 5: [240, 90.0]},
+    9: {0: [24, 14.0], 1: [48, 22.0], 2: [72, 30.0], 3: [120, 44.0], 4: [168, 56.0], 5: [240, 73.0]},
+    10: {0: [24, 17.0], 1: [48, 29.0], 2: [72, 39.0], 3: [120, 58.0], 4: [168, 75.0], 5: [240, 99.0]},
+    11: {0: [24, 32.0], 1: [48, 49.0], 2: [72, 63.0], 3: [120, 87.0], 4: [168, 108.0], 5: [240, 135.0]},
+    12: {0: [24, 30.52], 1: [48, 40.468], 2: [72, 47.73], 3: [120, 58.75], 4: [168, 67.37], 5: [240, 77.89]}
 }
 
 class Command(BaseCommand):
-    help = 'Generate Basin Wise Flashflood for BMD-WRF Pre-Monsoon'
+    help = 'Generate Pre-Monsoon Basin Wise Flashflood for BMD-WRF with updated thresholds'
 
     def add_arguments(self, parser):
         parser.add_argument('date', nargs='?', type=str, help='Initialization date (YYYY-MM-DD)')
@@ -174,15 +174,15 @@ class Command(BaseCommand):
     def insert_dataframe(self, df):
         if df.empty: return
         p_date, b_id = df['prediction_date'].iloc[0], df['basin_id'].iloc[0]
-        # Targets the Pre-Monsoon model
-        Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=p_date, basin_id=b_id).delete()
-        forecast_objects = [Basin_Wise_Flash_Flood_Forecast(**row) for _, row in df.iterrows()]
-        Basin_Wise_Flash_Flood_Forecast.objects.bulk_create(forecast_objects)
+        
+        BMDWRFPreMonsoonBasinWiseFlashFloodForecast.objects.filter(prediction_date=p_date, basin_id=b_id).delete()
+        forecast_objects = [BMDWRFPreMonsoonBasinWiseFlashFloodForecast(**row) for _, row in df.iterrows()]
+        BMDWRFPreMonsoonBasinWiseFlashFloodForecast.objects.bulk_create(forecast_objects)
         self.stdout.write(self.style.SUCCESS(f"  Inserted {len(forecast_objects)} Pre-Monsoon records for Basin {b_id}."))
 
     def main(self, date_input):
         for basin_id, station_name in STATION_DICT.items():
-            self.stdout.write(f"Calculating Basin {basin_id}: {station_name}")
+            self.stdout.write(f"Calculating Pre-Monsoon Basin {basin_id}: {station_name}")
             obs = self.get_observed_rainfall(station_name, date_input)
             fcst = self.compute_basin_wise_forecast(station_name, date_input)
             

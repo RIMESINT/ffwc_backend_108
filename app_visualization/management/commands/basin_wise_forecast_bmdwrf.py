@@ -17,15 +17,15 @@ from app_visualization.models import (
 from ffwc_django_project.project_constant import app_visualization
 
 # Constants
-# system_state_name[2] is typically BMDWRF_HRES_VIS based on previous logs
-SYSTEM_STATE_NAME_BMD = app_visualization['system_state_name'][2]
+# Changed to index [4] to correspond with BMDWRF basin_specific source intent
+SYSTEM_STATE_NAME_BMD = app_visualization['system_state_name'][4]
 BMDWRF_BASE_URL = settings.BASE_DIR
 
 def r2(val):
     return round(val, 2) if val is not None else 0.0
 
 class Command(BaseCommand):
-    help = 'Process BMDWRF NetCDF into ForecastDaily for Source ID 2'
+    help = 'Process BMDWRF NetCDF into ForecastDaily for Source ID 4 (BMDWRF)'
 
     def add_arguments(self, parser):
         parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
@@ -58,7 +58,6 @@ class Command(BaseCommand):
                     continue
 
                 shape_obj = shape(geom_raw)
-                # Filter out GeometryCollections, Points, or Lines that pyscissor can't handle
                 if shape_obj.is_empty or shape_obj.geom_type not in ['Polygon', 'MultiPolygon']:
                     continue
 
@@ -84,7 +83,7 @@ class Command(BaseCommand):
 
                     upazila_data_daily.append(ForecastDaily(
                         parameter=rf_obj,
-                        source=source_obj, # This is now ID 2
+                        source=source_obj, 
                         basin_details=basin_details,
                         step_start=dt_start,
                         step_end=dt_end,
@@ -97,7 +96,7 @@ class Command(BaseCommand):
                 if upazila_data_daily:
                     ForecastDaily.objects.bulk_create(upazila_data_daily)
 
-                # Process 3-Hourly Steps (Optional, usually for first 4 days)
+                # Process 3-Hourly Steps
                 upazila_data_steps = []
                 for t_step in range(0, 32):
                     s_idx, e_idx = t_step, t_step + 1
@@ -139,24 +138,18 @@ class Command(BaseCommand):
     def main(self, date_str):
         forecast_date = dt.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d') 
         
-        # TARGET VISUALIZATION SOURCE (ID 2)
+        # TARGET SOURCE ID 4 (BMDWRF / basin_specific)
         try:
-            source_obj = Source.objects.get(
-                name='BMDWRF_HRES_VIS', 
-                source_type="vis",
-                source_data_type__name="Forecast"
-            )
+            source_obj = Source.objects.get(pk=4)
         except Source.DoesNotExist:
-            # Fallback to direct ID if name differs
-            source_obj = Source.objects.get(pk=2)
+            # Fallback by name/type if ID is not exactly 4
+            source_obj = Source.objects.get(
+                name='BMDWRF', 
+                source_type="basin_specific"
+            )
 
-        # Construct NC path (usually stored under the raw source path)
-        try:
-            raw_source = Source.objects.get(name='BMDWRF', source_type="basin_specific")
-            nc_dir = raw_source.source_path
-        except:
-            nc_dir = source_obj.source_path
-
+        # Get the directory path directly from source_obj (ID 4)
+        nc_dir = source_obj.source_path
         nc_loc = os.path.join(BMDWRF_BASE_URL, nc_dir.strip('/'), f'wrf_out_{date_str}00.nc')
         
         if not os.path.exists(nc_loc):

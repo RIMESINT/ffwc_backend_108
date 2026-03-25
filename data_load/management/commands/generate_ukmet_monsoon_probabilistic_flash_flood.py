@@ -37,7 +37,7 @@ STATION_THRESHOLDS = {
 }
 
 class Command(BaseCommand):
-    help = 'Generate Probabilistic Basin Wise Flash Flood Forecasts using local UKMET Ensemble data.'
+    help = 'Generate Probabilistic Basin Wise Flash Flood Forecasts starting from Run Date.'
 
     def add_arguments(self, parser):
         parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYY-MM-DD)')
@@ -47,7 +47,6 @@ class Command(BaseCommand):
         if not date_input:
             date_input = datetime.now().strftime('%Y-%m-%d')
         
-        # Format normalization
         if "-" not in date_input:
             try: date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
             except: pass
@@ -60,43 +59,26 @@ class Command(BaseCommand):
     def process_ensemble_member(self, station_gdf, forecast_dir, filename):
         filepath = os.path.join(forecast_dir, filename)
         if not os.path.exists(filepath): return None
-        
         try:
             with xr.open_dataset(filepath) as ds:
-                # 1. Coordinate Setup
                 x_dim = "longitude" if "longitude" in ds.coords else "lon"
                 y_dim = "latitude" if "latitude" in ds.coords else "lat"
-                
                 ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
                 ds.rio.write_crs("epsg:4326", inplace=True)
-                # Sort coordinates to prevent NoDataInBounds errors
                 ds = ds.sortby([y_dim, x_dim])
-
-                # 2. Clipping (using all_touched for small basins like Muslimpur)
                 clipped = ds.rio.clip(station_gdf.geometry, station_gdf.crs, drop=True, all_touched=True)
-                
-                # 3. Variable Detection (Prioritize 'tp' for new files)
                 target_var = next((v for v in ['tp', 'thickness_of_rainfall_amount', 'precipitation'] if v in clipped), None)
                 if not target_var: return None
 
-                # 4. Compute Daily Rainfall
-                # Since inspection shows 24h intervals of "Daily total", each step is one day.
                 daily_rainfall = {}
                 weights = np.cos(np.deg2rad(clipped[y_dim]))
-                
                 for ts in list(clipped.indexes['time']):
                     step_data = clipped.sel(time=ts)
                     mean_val = step_data[target_var].weighted(weights).mean(dim=[x_dim, y_dim]).item()
-                    
-                    # New files are in mm, old were in m. Let's check attributes if possible, 
-                    # but per your inspection, new 'tp' is mm. 
                     val_mm = mean_val if ds[target_var].attrs.get('units') == 'mm' else mean_val * 1000
-                    
                     daily_rainfall[ts.strftime('%Y-%m-%d')] = round(val_mm if not math.isnan(val_mm) else 0.0, 4)
-                
                 return daily_rainfall
-        except Exception as e:
-            return None
+        except: return None
 
     def get_observed_rainfall(self, station_gdf, given_date):
         daily_precip = {}
@@ -121,33 +103,44 @@ class Command(BaseCommand):
         num_members = len(all_member_rainfall)
         threshold_df = pd.DataFrame.from_dict(thresholds, orient='index', columns=['Hours', 'Threshold'])
         
-        # Combine member data into a DataFrame where rows are dates, columns are members
+        # Combine all member data
         combined_df = pd.DataFrame(all_member_rainfall).T.fillna(0)
+        combined_df.index = pd.to_datetime(combined_df.index)
         
-        forecast_dates = [d for d in pd.to_datetime(combined_df.index) if d >= pd.to_datetime(given_date)]
+        # --- FIX: Ensure the Run Date and 10 days ahead are in the index ---
+        start_dt = pd.to_datetime(given_date)
+        forecast_range = [start_dt + timedelta(days=i) for i in range(10)]
+        
+        # Reindex to include all history + Run Date + Forecast, filling missing with 0
+        all_required_dates = sorted(list(set(combined_df.index).union(set(forecast_range))))
+        combined_df = combined_df.reindex(all_required_dates, fill_value=0)
+        
         probability_results = {}
         
-        for p_date in sorted(forecast_dates):
+        # Only iterate over the 10-day window starting from given_date
+        for p_date in forecast_range:
             daily_probs = {}
             for idx, (hour, threshold) in threshold_df.iterrows():
                 days_to_sum = int(hour / 24)
-                # Look BACKWARD from the forecast date to include historical context if needed
+                # Historical + Forecast window for the specific threshold
                 sum_range = [p_date - timedelta(days=i) for i in range(days_to_sum)]
-                sum_range_strs = [d.strftime('%Y-%m-%d') for d in sum_range]
                 
-                # Check which dates exist in our combined dataframe
-                available_cols = [d for d in sum_range_strs if d in combined_df.index]
-                if not available_cols: continue
-                
-                # Sum across the days for each member
-                member_sums = combined_df.loc[available_cols].sum(axis=0)
-                exceed_count = (member_sums > threshold).sum()
-                daily_probs[idx] = round((exceed_count / num_members) * 100, 2)
+                # Check sums across the days for each member
+                try:
+                    member_sums = combined_df.loc[sum_range].sum(axis=0)
+                    exceed_count = (member_sums > threshold).sum()
+                    daily_probs[idx] = round((exceed_count / num_members) * 100, 2)
+                except KeyError:
+                    daily_probs[idx] = 0.0 # Safety fallback
             
             if daily_probs:
                 probability_results[p_date.strftime('%Y-%m-%d')] = daily_probs
                 
-        return {"Hours": threshold_df['Hours'].to_dict(), "Thresholds": threshold_df['Threshold'].to_dict(), **probability_results}
+        return {
+            "Hours": threshold_df['Hours'].to_dict(), 
+            "Thresholds": threshold_df['Threshold'].to_dict(), 
+            **probability_results
+        }
 
     def save_to_database(self, data_dict, prediction_date, basin_id):
         if not data_dict or "Hours" not in data_dict: return
@@ -168,9 +161,8 @@ class Command(BaseCommand):
             UKMetMonsoonProbabilisticFlashFloodForecast.objects.bulk_create(rows)
 
     def run_forecast_for_date(self, date_input):
-        self.stdout.write(self.style.SUCCESS(f'--- Starting Probabilistic Generation: {date_input} ---'))
+        self.stdout.write(self.style.SUCCESS(f'--- Starting Generation: {date_input} ---'))
         success = False
-        
         date_nodash = date_input.replace('-', '')
         forecast_dir = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_ens_data/ukmet_ens_{date_nodash}/"
 
@@ -179,7 +171,6 @@ class Command(BaseCommand):
             if not os.path.exists(json_path): continue
             station_gdf = gpd.read_file(json_path, crs="epsg:4326")
 
-            # Process all 18 members
             all_members = []
             for i in range(18):
                 res = self.process_ensemble_member(station_gdf, forecast_dir, f'precip_EN{i:02d}.nc')
@@ -187,14 +178,12 @@ class Command(BaseCommand):
 
             if not all_members: continue
 
-            # Get Observed and merge (simplified for exceedance calc)
-            # Probability calc needs the ensemble members, but cumulative logic includes history.
-            # We merge observed into EACH member's history.
             obs_df = self.get_observed_rainfall(station_gdf, date_input)
             obs_dict = dict(zip(obs_df['Date'], obs_df['Rainfall']))
             
             enriched_members = []
             for member_rain in all_members:
+                # Merge historical obs into each member
                 enriched_members.append({**obs_dict, **member_rain})
 
             response = self.calculate_exceedance_probability(enriched_members, STATION_THRESHOLDS[basin_id], date_input)
@@ -202,5 +191,4 @@ class Command(BaseCommand):
                 self.save_to_database(response, date_input, basin_id)
                 success = True
                 self.stdout.write(f"  Processed {station_name}")
-
         return success
