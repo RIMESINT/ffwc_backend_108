@@ -9,11 +9,12 @@ from datetime import datetime, timedelta
 from django.conf import settings
 from django.core.management import BaseCommand
 from django.utils import timezone
+from rioxarray.exceptions import NoDataInBounds
 
-# Target Model
+# Import the correct Pre-Monsoon Probabilistic model
 from data_load.models import UKMetPreMonsoonProbabilisticFlashFloodForecast
 
-# --- Pre-Monsoon Configuration ---
+# --- Pre-Monsoon Station Configurations ---
 STATION_DICT = { 
     1:'khaliajhuri', 2:'gowainghat', 3:'dharmapasha', 4:'userbasin',
     5:'laurergarh', 6:'muslimpur', 7:'debidwar', 8:'ballah',
@@ -36,20 +37,26 @@ STATION_THRESHOLDS = {
 }
 
 class Command(BaseCommand):
-    help = 'Generates UKMet Probabilistic PRE-MONSOON Flash Flood Forecasts with Diagnostics.'
+    help = 'Generates UKMet Probabilistic PRE-MONSOON Flash Flood Forecasts with Risk Summary.'
 
     def add_arguments(self, parser):
         parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYY-MM-DD)')
 
     def handle(self, *args, **kwargs):
-        date_input = kwargs.get('date') or datetime.now().strftime('%Y-%m-%d')
+        date_input = kwargs.get('date')
+        if not date_input:
+            date_input = datetime.now().strftime('%Y-%m-%d')
+        
+        # Standardize date format
         if "-" not in date_input:
-            try: date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
-            except: pass
+            try:
+                date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+            except:
+                pass
 
         if not self.run_forecast_for_date(date_input):
             yesterday = (datetime.strptime(date_input, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
-            self.stdout.write(self.style.WARNING(f"Data missing for {date_input}. Trying {yesterday}"))
+            self.stdout.write(self.style.WARNING(f"Data missing for {date_input}. Trying yesterday: {yesterday}"))
             self.run_forecast_for_date(yesterday)
 
     def process_ensemble_member(self, station_gdf, forecast_dir, filename):
@@ -59,6 +66,7 @@ class Command(BaseCommand):
             with xr.open_dataset(filepath) as ds:
                 x_dim = "longitude" if "longitude" in ds.coords else "lon"
                 y_dim = "latitude" if "latitude" in ds.coords else "lat"
+                
                 ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
                 ds.rio.write_crs("epsg:4326", inplace=True)
                 ds = ds.sortby([y_dim, x_dim])
@@ -67,6 +75,7 @@ class Command(BaseCommand):
                 target_var = next((v for v in ['tp', 'thickness_of_rainfall_amount', 'precipitation'] if v in clipped), None)
                 if not target_var: return None
 
+                # Unit check (convert m to mm if necessary)
                 data_array = clipped[target_var]
                 if ds[target_var].attrs.get('units') != 'mm':
                     data_array = data_array * 1000
@@ -76,13 +85,16 @@ class Command(BaseCommand):
 
                 daily_rainfall = {}
                 weights = np.cos(np.deg2rad(daily_ds[y_dim]))
+                
                 for ts in list(daily_ds.indexes['time']):
                     step_data = daily_ds.sel(time=ts)
                     mean_val = step_data.weighted(weights).mean(dim=[x_dim, y_dim]).item()
                     daily_rainfall[ts.strftime('%Y-%m-%d')] = round(mean_val if not math.isnan(mean_val) else 0.0, 4)
                 
                 return daily_rainfall
-        except Exception: return None
+        except Exception as e:
+            print(f"Error processing {filename}: {e}")
+            return None
 
     def get_observed_rainfall(self, station_gdf, given_date):
         daily_precip = {}
@@ -91,6 +103,7 @@ class Command(BaseCommand):
             obs_date = given_dt - timedelta(days=i)
             filename = f"{obs_date.year}{obs_date.timetuple().tm_yday:03d}.nc"
             filepath = os.path.join(settings.BASE_DIR, "observed", filename)
+            
             if os.path.exists(filepath):
                 try:
                     with xr.open_dataset(filepath) as ds:
@@ -100,70 +113,70 @@ class Command(BaseCommand):
                         weights = np.cos(np.deg2rad(clipped.lat))
                         val = clipped['precipitation'].weighted(weights).mean().item()
                         daily_precip[obs_date.strftime('%Y-%m-%d')] = val
-                except: pass
+                except:
+                    pass
         return pd.DataFrame(list(daily_precip.items()), columns=['Date', 'Rainfall'])
 
     def calculate_exceedance_probability(self, all_member_rainfall, thresholds, given_date):
         if not all_member_rainfall: return {}
         num_members = len(all_member_rainfall)
+        threshold_df = pd.DataFrame.from_dict(thresholds, orient='index', columns=['Hours', 'Threshold'])
         
-        probability_results = {
-            "Hours": {str(k): v[0] for k, v in thresholds.items()},
-            "Threshold": {str(k): v[1] for k, v in thresholds.items()}
-        }
-        
+        # Combine and Normalize (strips time to ensure alignment)
         combined_df = pd.DataFrame(all_member_rainfall).T.fillna(0)
         combined_df.index = pd.to_datetime(combined_df.index).normalize()
+        
         start_dt = pd.to_datetime(given_date).normalize()
         forecast_range = [start_dt + timedelta(days=i) for i in range(10)]
         
         all_required_dates = sorted(list(set(combined_df.index).union(set(forecast_range))))
         combined_df = combined_df.reindex(all_required_dates, fill_value=0)
         
+        probability_results = {}
         for p_date in forecast_range:
             daily_probs = {}
-            for idx, values in thresholds.items():
-                hour, threshold = values[0], values[1]
+            for idx, (hour, threshold) in threshold_df.iterrows():
                 days_to_sum = int(hour / 24)
                 sum_range = [(p_date - timedelta(days=i)).normalize() for i in range(days_to_sum)]
+                
                 try:
                     member_sums = combined_df.loc[sum_range].sum(axis=0)
                     exceed_count = (member_sums >= threshold).sum()
-                    daily_probs[str(idx)] = round((exceed_count / num_members) * 100, 2)
-                except: daily_probs[str(idx)] = 0.0
+                    daily_probs[idx] = round((exceed_count / num_members) * 100, 2)
+                except:
+                    daily_probs[idx] = 0.0
             
             probability_results[p_date.strftime('%Y-%m-%d')] = daily_probs
+                
         return probability_results
 
     def save_to_database(self, results, prediction_date, basin_id):
-        if not results: return
         rows = []
-        h_meta = results.get("Hours", {})
-        t_meta = results.get("Threshold", {})
+        hours_map = {idx: val[0] for idx, val in STATION_THRESHOLDS[basin_id].items()}
+        thresh_map = {idx: val[1] for idx, val in STATION_THRESHOLDS[basin_id].items()}
 
         for date_key, values in results.items():
-            if date_key in ["Hours", "Threshold"]: continue
-            for idx_str, prob_val in values.items():
+            for idx, prob_val in values.items():
                 rows.append(UKMetPreMonsoonProbabilisticFlashFloodForecast(
-                    prediction_date=prediction_date, basin_id=basin_id,
+                    prediction_date=prediction_date,
+                    basin_id=basin_id,
                     date=datetime.strptime(date_key, "%Y-%m-%d").date(),
-                    hours=h_meta.get(idx_str), thresholds=t_meta.get(idx_str),
+                    hours=hours_map[idx],
+                    thresholds=thresh_map[idx],
                     value=prob_val
                 ))
+        
         if rows:
             UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.filter(
-                prediction_date=prediction_date, basin_id=basin_id
+                prediction_date=prediction_date, 
+                basin_id=basin_id
             ).delete()
             UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.bulk_create(rows)
 
     def run_forecast_for_date(self, date_input):
         self.stdout.write(self.style.SUCCESS(f'--- UKMET Pre-Monsoon Probabilistic Processing: {date_input} ---'))
         success = False
-        
-        # Diagnostics
-        peak_prob = 0.0
-        peak_info = "N/A"
-        risk_categories = {"CRITICAL (>=75%)": [], "WARNING (50-74%)": [], "WATCH (10-49%)": []}
+        high_risk_summary = [] # For the summary log
 
         date_nodash = date_input.replace('-', '')
         forecast_dir = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_ens_data/ukmet_ens_{date_nodash}/"
@@ -174,52 +187,49 @@ class Command(BaseCommand):
             
             station_gdf = gpd.read_file(json_path, crs="epsg:4326")
             all_members_data = []
-            # UKMet Ensemble has 18 members (00 to 17)
-            for i in range(18):
-                filename = f'precip_EN{str(i).zfill(2)}.nc'
-                res = self.process_ensemble_member(station_gdf, forecast_dir, filename)
-                if res: all_members_data.append(res)
             
+            for i in range(18):
+                res = self.process_ensemble_member(station_gdf, forecast_dir, f'precip_EN{i:02d}.nc')
+                if res: all_members_data.append(res)
+
             if not all_members_data: continue
 
             obs_df = self.get_observed_rainfall(station_gdf, date_input)
             obs_dict = dict(zip(obs_df['Date'], obs_df['Rainfall']))
+            
             enriched_members = [{**obs_dict, **m} for m in all_members_data]
             response = self.calculate_exceedance_probability(enriched_members, STATION_THRESHOLDS[basin_id], date_input)
             
             if response:
                 self.save_to_database(response, date_input, basin_id)
                 success = True
-                
+                self.stdout.write(f"  Processed {station_name}")
+
+                # Populate High Risk Summary
                 for date_key, probs in response.items():
-                    if date_key in ["Hours", "Threshold"]: continue
-                    for idx_str, val in probs.items():
-                        if val > peak_prob:
-                            peak_prob = val
-                            peak_info = f"{station_name.upper()} ({response['Hours'][idx_str]}h) on {date_key}"
-                        
-                        alert = {'basin': station_name.upper(), 'date': date_key, 'hour': response['Hours'][idx_str], 'prob': val}
-                        if val >= 75: risk_categories["CRITICAL (>=75%)"].append(alert)
-                        elif val >= 50: risk_categories["WARNING (50-74%)"].append(alert)
-                        elif val >= 10: risk_categories["WATCH (10-49%)"].append(alert)
-                
-                self.stdout.write(f"  ✅ Processed {station_name}")
-
-        # --- FINAL SUMMARY LOG ---
-        self.stdout.write("\n" + "═"*60)
-        self.stdout.write(self.style.SUCCESS(f"🏁 RUN COMPLETE: {date_input}"))
+                    for idx, val in probs.items():
+                        if val >= 50.0:
+                            h_label = STATION_THRESHOLDS[basin_id][int(idx)][0]
+                            high_risk_summary.append({
+                                'basin': station_name.upper(),
+                                'date': date_key,
+                                'hour': h_label,
+                                'prob': val
+                            })
         
-        any_risk = False
-        for label, items in risk_categories.items():
-            if items:
-                any_risk = True
-                self.stdout.write(f"\n{label}:")
-                for i in sorted(items, key=lambda x: (x['prob'], x['date']), reverse=True)[:5]:
-                    self.stdout.write(f"  - {i['basin']}: {i['prob']}% ({i['hour']}h) on {i['date']}")
-
-        if not any_risk:
-            self.stdout.write(self.style.SUCCESS("\n✅ No Alert Thresholds (10%) exceeded."))
-            self.stdout.write(self.style.NOTICE(f"📊 Global Peak Diagnostic: {peak_prob}% at {peak_info}"))
+        # --- Final Print Out ---
+        self.stdout.write("\n" + "="*60)
+        self.stdout.write(self.style.SUCCESS(f"🏁 PROCESSING COMPLETE FOR {date_input}"))
         
-        self.stdout.write("\n" + "═"*60 + "\n")
+        if high_risk_summary:
+            self.stdout.write(self.style.WARNING(f"⚠️ HIGH RISK SUMMARY (Probability >= 50%):"))
+            high_risk_summary.sort(key=lambda x: x['date'])
+            for item in high_risk_summary:
+                msg = f"  - {item['basin']}: {item['prob']}% at {item['hour']}h window on {item['date']}"
+                self.stdout.write(msg)
+        else:
+            self.stdout.write(self.style.SUCCESS("✅ No basins exceeded the 50% risk threshold."))
+        
+        self.stdout.write("="*60 + "\n")
+        
         return success

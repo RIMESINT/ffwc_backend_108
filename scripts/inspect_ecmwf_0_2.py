@@ -1,33 +1,60 @@
 import xarray as xr
-import geopandas as gpd
+import pandas as pd
+import numpy as np
 import os
 
-# Paths
-nc_file = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_0_2/16032026.nc"
-json_file = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/floodForecastStations/muslimpur.json"
+# Target file path
+NC_FILE = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_0_2/25032026.nc"
 
-print("--- NetCDF File Inspection ---")
-if os.path.exists(nc_file):
-    ds = xr.open_dataset(nc_file)
-    print(f"Variables: {list(ds.data_vars)}")
-    print(f"Coordinates: {list(ds.coords)}")
-    
-    # Check Latitude Bounds
-    if 'latitude' in ds.coords:
-        lat = ds.latitude.values
-        print(f"Latitude range: {lat.min()} to {lat.max()}")
-    
-    # Check Longitude Bounds (Crucial for 0-360 vs -180-180 issues)
-    if 'longitude' in ds.coords:
-        lon = ds.longitude.values
-        print(f"Longitude range: {lon.min()} to {lon.max()}")
-else:
-    print("NetCDF file not found!")
+def perform_inspection(file_path):
+    if not os.path.exists(file_path):
+        print(f"Error: File not found at {file_path}")
+        return
 
-print("\n--- Basin Geometry Inspection (Muslimpur) ---")
-if os.path.exists(json_file):
-    gdf = gpd.read_file(json_file)
-    print(f"Basin Bounds: {gdf.total_bounds}") # [minx, miny, maxx, maxy]
-    print(f"Basin CRS: {gdf.crs}")
-else:
-    print("Basin JSON file not found!")
+    # Open dataset
+    ds = xr.open_dataset(file_path)
+    
+    print(f"🔍 Dataset Summary: {os.path.basename(file_path)}")
+    print("=" * 60)
+    print(ds)
+    print("-" * 60)
+
+    # 1. Coordinate Check
+    print("\n📍 Coordinate Ranges:")
+    for coord in ds.coords:
+        print(f"  {coord:10}: min={ds[coord].min().values}, max={ds[coord].max().values}, length={ds[coord].size}")
+
+    # 2. Time Step Analysis
+    print("\n📅 First 5 Time Steps:")
+    for t in ds.time.values[:5]:
+        print(f"  {pd.to_datetime(t)}")
+
+    # 3. Precipitation Variable Detection & Cumulative Test
+    print("\n🧪 Variable Analysis:")
+    found_vars = [v for v in ['tp', 'cp', 'lsp', 'precip'] if v in ds.data_vars]
+    
+    if not found_vars:
+        print("  ❌ No precipitation variables found.")
+    else:
+        for var in found_vars:
+            data = ds[var]
+            v_min = float(data.min())
+            v_max = float(data.max())
+            
+            # Check for cumulative behavior
+            # If the mean value of the last time step is significantly higher than the first, it's cumulative
+            first_mean = float(data.isel(time=0).mean())
+            last_mean = float(data.isel(time=-1).mean())
+            is_cumulative = last_mean > first_mean and last_mean > 0
+            
+            print(f"  Variable: '{var}'")
+            print(f"    - Units:      {data.attrs.get('units', 'Unknown')}")
+            print(f"    - Max Value:  {v_max}")
+            print(f"    - Mean Start: {first_mean}")
+            print(f"    - Mean End:   {last_mean}")
+            print(f"    - Behavior:   {'✅ CUMULATIVE' if is_cumulative else '🕒 INCREMENTAL'}")
+
+    ds.close()
+
+if __name__ == "__main__":
+    perform_inspection(NC_FILE)
