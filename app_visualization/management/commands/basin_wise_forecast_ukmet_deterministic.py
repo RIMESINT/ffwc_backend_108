@@ -24,7 +24,7 @@ def r2(val):
     return round(float(val), 2) if val is not None else 0.0
 
 class Command(BaseCommand):
-    help = 'Generate UKMET Deterministic Basin Forecast from /forecast/ukmet_det_data/'
+    help = 'Generate UKMET Deterministic Basin Forecast (Modified for Incremental Day 0 Data)'
 
     def add_arguments(self, parser):
         parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
@@ -35,30 +35,17 @@ class Command(BaseCommand):
                              cf_date.hour, cf_date.minute, cf_date.second)
 
     def find_ukmet_file(self, date_str):
-        """
-        Looks for precip_YYYYMMDD.nc in the specific forecast directory.
-        If the requested date is missing, it returns the most recent available .nc file.
-        """
-        # Path provided: /home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_det_data/
         base_dir = os.path.join(BMDWRF_BASE_URL, "forecast", "ukmet_det_data")
-        
-        # 1. Try specific date
         target_file = os.path.join(base_dir, f"precip_{date_str}.nc")
         if os.path.exists(target_file):
             return target_file, date_str
 
-        # 2. Fallback: Scan for the latest file in that directory
-        print(f"!!! File missing: {target_file}. Scanning for latest available...")
         search_pattern = os.path.join(base_dir, "precip_*.nc")
         files = sorted(glob.glob(search_pattern), reverse=True)
-
         if files:
             latest_file = files[0]
-            # Extract date string from filename (assuming precip_YYYYMMDD.nc)
-            # Filename is usually 'precip_20260317.nc'
             file_name = os.path.basename(latest_file)
             latest_date_str = file_name.split('_')[1].split('.')[0]
-            print(f"Using latest file found: {file_name}")
             return latest_file, latest_date_str
 
         return None, None
@@ -74,16 +61,27 @@ class Command(BaseCommand):
         times = ncf.variables['time']
         dates_raw = num2date(times[:], times.units, times.calendar)
         
-        # UKMET Deterministic variable is usually 'tp' (Total Precipitation)
+        # Based on inspection: Units are mm, Data is incremental
         rf_var = ncf.variables['tp'][:]
         rf_obj = Parameter.objects.get(name='rf')
 
-        for idx, i_shape in enumerate(tqdm(shf, desc=f"Basin: {basin_details.name}")):
+        # Initialization Date object
+        run_date_obj = dt.strptime(forecast_date, '%Y-%m-%d').date()
+        
+        # Attribute safe check
+        b_name = getattr(basin_details, 'name', getattr(basin_details, 'basin_name', f"ID: {basin_details.id}"))
+
+        for idx, i_shape in enumerate(tqdm(shf, desc=f"Basin: {b_name}")):
             try:
                 geom_raw = i_shape.get('geometry')
                 if not geom_raw: continue
 
                 shape_obj = shape(geom_raw)
+                
+                # GEOMETRY SANITIZER: Fix self-intersections
+                if not shape_obj.is_valid:
+                    shape_obj = shape_obj.buffer(0)
+
                 if shape_obj.is_empty or shape_obj.geom_type not in ['Polygon', 'MultiPolygon']:
                     continue
 
@@ -91,15 +89,26 @@ class Command(BaseCommand):
                 weight_grid = pys.get_masked_weight() 
 
                 upazila_data_daily = []
-                # Process available days (UKMET is usually 6-7 days)
                 num_steps = len(dates_raw)
-                for day_idx in range(num_steps - 1):
-                    
-                    dt_start = timezone.make_aware(self.to_pydt(dates_raw[day_idx]))
-                    dt_end   = timezone.make_aware(self.to_pydt(dates_raw[day_idx+1]))
 
-                    # Extract rainfall grid for this step
-                    rf_step = rf_var[day_idx, :, :]
+                for d_idx in range(num_steps):
+                    # Convert NC time to aware DT
+                    curr_nc_dt = timezone.make_aware(self.to_pydt(dates_raw[d_idx]))
+                    
+                    if d_idx == 0:
+                        # RECOVERY: Index 0 (March 29 00:00) is the rain for the Run Date (March 28)
+                        dt_start = timezone.make_aware(dt.combine(run_date_obj, pydt.time.min))
+                        dt_end   = curr_nc_dt
+                    else:
+                        # Standard sequence
+                        dt_start = timezone.make_aware(self.to_pydt(dates_raw[d_idx-1]))
+                        dt_end   = curr_nc_dt
+
+                    # Extract rainfall grid for this standalone step (no subtraction needed)
+                    rf_step = rf_var[d_idx, :, :]
+                    
+                    # Zero out numerical noise (negative values)
+                    rf_step[rf_step < 0] = 0
                     
                     rf_masked = np.ma.masked_array(rf_step, mask=weight_grid.mask)
                     rf_avg = np.average(rf_step, weights=weight_grid)
@@ -120,25 +129,23 @@ class Command(BaseCommand):
                     ForecastDaily.objects.bulk_create(upazila_data_daily)
 
             except Exception as e:
-                # Silently continue to process next basin feature
                 continue
         shf.close()
 
     def update_state(self, forecast_date_str, source_obj):
-        date_obj = dt.strptime(forecast_date_str, '%Y-%m-%d')
-        aware_date = timezone.make_aware(date_obj)
+        # Update system state last update to the current time (now)
         SystemState.objects.update_or_create(
             source=source_obj, 
             name=SYSTEM_STATE_NAME_UKMET,
-            defaults={'last_update': aware_date}
+            defaults={'last_update': timezone.now()}
         )
-        print(f"System state updated for UKMET to {forecast_date_str}")
+        print(f"System state updated for UKMET for run date: {forecast_date_str}")
 
     def main(self, date_str):
         nc_loc, actual_date_str = self.find_ukmet_file(date_str)
         
         if not nc_loc:
-            print(f"Error: No UKMET files found in /forecast/ukmet_det_data/")
+            print(f"Error: No UKMET files found.")
             return
 
         forecast_date = dt.strptime(actual_date_str, '%Y%m%d').strftime('%Y-%m-%d')
@@ -150,20 +157,24 @@ class Command(BaseCommand):
             return
 
         ncf = nco(nc_loc, 'r')
-        # Exclude basins marked as not working
         basin_list = BasinDetails.objects.all().exclude(name__icontains='_not_working')
 
         for basin in basin_list:
             if basin.shape_file_path:
-                file_path = os.path.join(BMDWRF_BASE_URL, basin.shape_file_path.strip('/'))
+                file_path = os.path.join(BMDWRF_BASE_URL, basin.shape_file_path.lstrip('/'))
                 if os.path.exists(file_path):
-                    # Clean up existing data for this date/source to prevent duplicates
-                    ForecastDaily.objects.filter(source=source_obj, forecast_date=forecast_date, basin_details=basin).delete()
+                    # Clean up existing data for this specific run and basin
+                    ForecastDaily.objects.filter(
+                        source=source_obj, 
+                        forecast_date=forecast_date, 
+                        basin_details=basin
+                    ).delete()
                     
                     self.gen_upazila_forecast(forecast_date, source_obj, ncf, file_path, basin)
 
         self.update_state(forecast_date, source_obj)
         ncf.close()
+        print(f"🏁 Finished processing UKMET for {forecast_date}")
 
     def handle(self, *args, **kwargs):
         fdate = kwargs['fdate'] or dt.now().strftime('%Y%m%d')

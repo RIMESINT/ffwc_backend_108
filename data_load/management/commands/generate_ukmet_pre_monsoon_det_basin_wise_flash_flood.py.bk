@@ -1,19 +1,18 @@
 import os
 import math
-from datetime import datetime, timedelta
-
-import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
+import geopandas as gpd
+from datetime import datetime, timedelta
+
 from django.conf import settings
 from django.core.management import BaseCommand
-from rioxarray.exceptions import NoDataInBounds
+from django.utils import timezone
 
-# Import the new Pre-Monsoon model
 from data_load.models import UKMetPreMonsoonBasinWiseFlashFloodForecast
 
-# --- Pre-Monsoon Station Configurations ---
+# --- Pre-Monsoon Configuration ---
 STATION_DICT = { 
     1:'khaliajhuri', 2:'gowainghat', 3:'dharmapasha', 4:'userbasin',
     5:'laurergarh', 6:'muslimpur', 7:'debidwar', 8:'ballah',
@@ -42,16 +41,10 @@ class Command(BaseCommand):
         parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYY-MM-DD)')
 
     def handle(self, *args, **kwargs):
-        date_input = kwargs.get('date')
-        if not date_input:
-            date_input = datetime.now().strftime('%Y-%m-%d')
-        
-        # Standardize date format (YYYY-MM-DD)
-        try:
-            if "-" not in date_input:
-                date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
-        except:
-            pass
+        date_input = kwargs.get('date') or datetime.now().strftime('%Y-%m-%d')
+        if "-" not in date_input:
+            try: date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+            except: pass
 
         if not self.run_forecast_for_date(date_input):
             yesterday = (datetime.strptime(date_input, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -63,37 +56,43 @@ class Command(BaseCommand):
         forecast_file = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_det_data/precip_{date_str_nodash}.nc"
         
         basin_json = os.path.join(settings.BASE_DIR, 'assets', 'floodForecastStations', f'{station_name}.json')
-        if not os.path.exists(basin_json): return {}
+        if not os.path.exists(basin_json) or not os.path.exists(forecast_file): return {}
+        
         station_gdf = gpd.read_file(basin_json, crs="epsg:4326")
 
         try:
             with xr.open_dataset(forecast_file) as ds:
-                if 'tp' not in ds.variables:
-                    return {}
+                # Detect spatial dimensions
+                x_dim = "longitude" if "longitude" in ds.coords else "lon"
+                y_dim = "latitude" if "latitude" in ds.coords else "lat"
                 
-                ds.rio.set_spatial_dims(x_dim="longitude", y_dim="latitude", inplace=True)
+                ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
                 ds.rio.write_crs("epsg:4326", inplace=True)
-                ds = ds.sortby(['latitude', 'longitude'])
+                
+                # Sort coordinates (Lat is increasing in this file, but sorting is safer)
+                ds = ds.sortby([y_dim, x_dim])
                 
                 clipped = ds.rio.clip(station_gdf.geometry, station_gdf.crs, drop=True, all_touched=True)
-                
+                target_var = next((v for v in ['tp', 'thickness_of_rainfall_amount', 'precipitation'] if v in clipped), None)
+                if not target_var: return {}
+
+                # Unit check: inspection showed mm
+                data_array = clipped[target_var]
+                if ds[target_var].attrs.get('units') != 'mm':
+                    data_array = data_array * 1000
+
                 daily_rainfall = {}
-                time_steps = list(clipped.indexes['time'])
+                weights = np.cos(np.deg2rad(data_array[y_dim]))
                 
-                for ts in time_steps:
-                    data_step = clipped.sel(time=ts)
-                    mean_val = data_step['tp'].mean(dim=["longitude", "latitude"]).values.tolist()
-                    val = mean_val if isinstance(mean_val, (float, int)) else mean_val[0]
-                    
-                    date_key = ts.strftime('%Y-%m-%d')
-                    daily_rainfall[date_key] = round(val if not math.isnan(val) else 0.0, 4)
+                # Since data is already daily, no resampling is needed
+                for ts in list(data_array.indexes['time']):
+                    step_data = data_array.sel(time=ts)
+                    mean_val = step_data.weighted(weights).mean(dim=[x_dim, y_dim]).item()
+                    daily_rainfall[ts.strftime('%Y-%m-%d')] = round(mean_val if not math.isnan(mean_val) else 0.0, 4)
                 
                 return daily_rainfall
-
-        except (FileNotFoundError, NoDataInBounds):
-            return {}
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f" Error in {station_name}: {e}"))
+            print(f"Error in {station_name}: {e}")
             return {}
 
     def get_observed_rainfall(self, station_name, given_date):
@@ -118,49 +117,10 @@ class Command(BaseCommand):
                 except: pass
         return daily_precip
 
-    def calculate_flash_flood_forecast(self, combined_rainfall, thresholds, given_date):
-        if not combined_rainfall: return {}
-        
-        forecast_start_date = pd.to_datetime(given_date)
-        all_dates = sorted(pd.to_datetime(list(combined_rainfall.keys())))
-        process_dates = [d for d in all_dates if d >= forecast_start_date]
-        
-        results = {}
-        for p_date in process_dates:
-            cum_vals = {}
-            for idx, (hour, _) in thresholds.items():
-                days = int(hour / 24)
-                sum_range = [p_date - timedelta(days=i) for i in range(days)]
-                daily_sum = sum(combined_rainfall.get(d.strftime('%Y-%m-%d'), 0) for d in sum_range)
-                cum_vals[idx] = round(daily_sum, 2)
-            results[p_date.strftime('%Y-%m-%d')] = cum_vals
-
-        return results
-
-    def save_to_database(self, results, prediction_date, basin_id):
-        rows = []
-        # Map indices to actual values from pre-monsoon thresholds
-        hours_map = {idx: val[0] for idx, val in STATION_THRESHOLDS[basin_id].items()}
-        thresh_map = {idx: val[1] for idx, val in STATION_THRESHOLDS[basin_id].items()}
-
-        for date_key, values in results.items():
-            for idx, val in values.items():
-                rows.append(UKMetPreMonsoonBasinWiseFlashFloodForecast(
-                    prediction_date=prediction_date,
-                    basin_id=basin_id,
-                    date=datetime.strptime(date_key, "%Y-%m-%d").date(),
-                    hours=hours_map[idx],
-                    thresholds=thresh_map[idx],
-                    value=val
-                ))
-        
-        if rows:
-            UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.filter(prediction_date=prediction_date, basin_id=basin_id).delete()
-            UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.bulk_create(rows)
-
     def run_forecast_for_date(self, date_input):
-        self.stdout.write(self.style.SUCCESS(f'--- UKMET Pre-Monsoon Processing: {date_input} ---'))
-        success_count = 0
+        self.stdout.write(self.style.SUCCESS(f'--- Starting UKMET Det Generation: {date_input} ---'))
+        success = False
+        high_risk_summary = []
 
         for basin_id, station_name in STATION_DICT.items():
             forecast_data = self.get_daily_forecast_rainfall(station_name, date_input)
@@ -169,11 +129,62 @@ class Command(BaseCommand):
             obs_data = self.get_observed_rainfall(station_name, date_input)
             combined = {**obs_data, **forecast_data}
             
-            results = self.calculate_flash_flood_forecast(combined, STATION_THRESHOLDS[basin_id], date_input)
+            # Normalize dates for lookup
+            combined_normalized = {pd.to_datetime(k).normalize(): v for k, v in combined.items()}
             
+            forecast_start = pd.to_datetime(date_input).normalize()
+            process_dates = [forecast_start + timedelta(days=i) for i in range(10)]
+            
+            results = {}
+            for p_date in process_dates:
+                cum_vals = {}
+                for idx, (hour, threshold) in STATION_THRESHOLDS[basin_id].items():
+                    days = int(hour / 24)
+                    sum_range = [(p_date - timedelta(days=i)).normalize() for i in range(days)]
+                    daily_sum = sum(combined_normalized.get(d, 0) for d in sum_range)
+                    cum_vals[idx] = round(daily_sum, 2)
+                    
+                    # Log risk for forecast days only
+                    if daily_sum >= threshold and (p_date >= forecast_start):
+                        high_risk_summary.append({
+                            'basin': station_name.upper(),
+                            'date': p_date.strftime('%Y-%m-%d'),
+                            'hour': hour,
+                            'val': round(daily_sum, 2),
+                            'thresh': threshold
+                        })
+                results[p_date.strftime('%Y-%m-%d')] = cum_vals
+
             if results:
                 self.save_to_database(results, date_input, basin_id)
-                success_count += 1
-                self.stdout.write(f"  Processed Basin {basin_id} ({station_name})")
+                success = True
+                self.stdout.write(f"  Processed {station_name}")
 
-        return success_count > 0
+        # Final Risk Summary
+        self.stdout.write("\n" + "="*60)
+        self.stdout.write(self.style.SUCCESS(f"🏁 PROCESSING COMPLETE: {date_input}"))
+        if high_risk_summary:
+            self.stdout.write(self.style.WARNING("⚠️  THRESHOLDS EXCEEDED IN DETERMINISTIC FORECAST:"))
+            high_risk_summary.sort(key=lambda x: x['date'])
+            for item in high_risk_summary:
+                self.stdout.write(f"  - {item['basin']}: {item['val']}mm exceeds {item['thresh']}mm ({item['hour']}h) on {item['date']}")
+        else:
+            self.stdout.write(self.style.SUCCESS("✅ No thresholds exceeded."))
+        self.stdout.write("="*60 + "\n")
+
+        return success
+
+    def save_to_database(self, results, prediction_date, basin_id):
+        rows = []
+        h_map = {idx: v[0] for idx, v in STATION_THRESHOLDS[basin_id].items()}
+        t_map = {idx: v[1] for idx, v in STATION_THRESHOLDS[basin_id].items()}
+        for d_key, vals in results.items():
+            for idx, v in vals.items():
+                rows.append(UKMetPreMonsoonBasinWiseFlashFloodForecast(
+                    prediction_date=prediction_date, basin_id=basin_id,
+                    date=datetime.strptime(d_key, "%Y-%m-%d").date(),
+                    hours=h_map[idx], thresholds=t_map[idx], value=v
+                ))
+        if rows:
+            UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.filter(prediction_date=prediction_date, basin_id=basin_id).delete()
+            UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.bulk_create(rows)

@@ -104,6 +104,7 @@ class Command(BaseCommand):
             rf_d = rf[day, :, :]
 
             # --- 1. Generate GeoJSON Map Layer ---
+            # Create a hidden figure for the contour data
             fig_map = pl.figure()
             ax_map = fig_map.add_axes([0, 0, 1, 1])
             ax_map.axis('off')
@@ -121,9 +122,15 @@ class Command(BaseCommand):
                 jfw.write(rf_geojson)
             pl.close(fig_map)
 
-            # --- 2. Generate SVG Legend (BMD Style) ---
-            ax_leg = pl.axes()
-            rf_leg_plot = pl.contourf(
+            # --- 2. Generate SVG Legend (BMD Style) - Adjusted to be bigger ---
+            # Establish explicit standard physical size (e.g., 16 inches wide).
+            # Default is roughly (6.4x4.8). Combined with tight bbox, 
+            # setting explicitly larger figsize makes output SVG much larger.
+            fig_leg = pl.figure(figsize=(16, 6))
+            ax_leg = fig_leg.add_subplot(111)
+
+            # Standard contour plot logic (used purely to base colorbar on)
+            rf_leg_plot = ax_leg.contourf(
                 zoom(lon, 2), zoom(lat, 2), zoom(rf_d, 2), 
                 levels=rf_levels, 
                 cmap=bmd_pr_dly_cmap, 
@@ -131,22 +138,33 @@ class Command(BaseCommand):
                 extend='max'
             )
             
-            cbar = pl.colorbar(
+            # Create the horizontal colorbar
+            cbar = fig_leg.colorbar(
                 rf_leg_plot, 
                 orientation='horizontal', 
-                ticks=rf_levels[:-1] 
+                ticks=rf_levels[:-1],
+                ax=ax_leg # specific axes to put colorbar against
             )
-            cbar.set_ticklabels(['1', '10', '20', '40', '80', '160', '250'])
+            
+            # Increase fontsize of tick labels to match larger scale
+            cbar.set_ticklabels(
+                ['1', '10', '20', '40', '80', '160', '250'], 
+                fontsize=16 # Standard BMD visualization fontsize for larger visual
+            )
             cbar.outline.set_visible(False)
             
-            ax_leg.remove()
+            # Hide the contour map axis completely, leaving only the colorbar
+            ax_leg.axis('off')
+            ax_leg.set_visible(False)
+            
+            # Save the colorbar figure as SVG with tight bounding box
             pl.savefig(
                 os.path.join(forecast_out_dir, f'rf{cmap_suffix}'), 
                 transparent=True, 
                 pad_inches=0, 
-                bbox_inches='tight'
+                bbox_inches='tight' 
             )
-            pl.close()
+            pl.close(fig_leg)
         
             finfo['rf'].append({
                 'file'  : f'rf{json_suffix}',
