@@ -68,6 +68,8 @@ class Command(BaseCommand):
 
             # 6. Construct JSON Structure
             output_data = {
+                "code": "success",
+                "message": "Data has been fetched!",
                 "metadata": {
                     "station_id": 'SW110',
                     "basin_name": "Gumti River (Cumilla)",

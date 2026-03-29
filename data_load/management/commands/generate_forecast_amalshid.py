@@ -85,6 +85,8 @@ class Command(BaseCommand):
 
             # 7. Final JSON Construction
             output_data = {
+                "code": "success",
+                "message": "Data has been fetched!",
                 "metadata": {
                     "station_id": 'SW172',
                     "basin_name": "Kushiyara River (Amalshid)",

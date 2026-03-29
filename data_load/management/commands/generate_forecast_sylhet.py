@@ -93,6 +93,8 @@ class Command(BaseCommand):
 
             # 7. Construct JSON Structure
             output_data = {
+                "code": "success",
+                "message": "Data has been fetched!",
                 "metadata": {
                     "station_id": 'SW267',
                     "basin_name": "Surma River (Sylhet)",
