@@ -36,7 +36,7 @@ STATION_THRESHOLDS = {
 }
 
 class Command(BaseCommand):
-    help = 'Generates UKMet Probabilistic PRE-MONSOON Flash Flood Forecasts with Diagnostics.'
+    help = 'Generates UKMet Probabilistic PRE-MONSOON Flash Flood Forecasts with robust error handling.'
 
     def add_arguments(self, parser):
         parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYY-MM-DD)')
@@ -49,21 +49,26 @@ class Command(BaseCommand):
 
         if not self.run_forecast_for_date(date_input):
             yesterday = (datetime.strptime(date_input, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
-            self.stdout.write(self.style.WARNING(f"Data missing for {date_input}. Trying {yesterday}"))
+            self.stdout.write(self.style.WARNING(f"Data missing for {date_input}. Trying {yesterday}..."))
             self.run_forecast_for_date(yesterday)
 
-    def process_ensemble_member(self, station_gdf, forecast_dir, filename):
+    def process_ensemble_member(self, station_gdf, forecast_dir, filename, run_date_str):
         filepath = os.path.join(forecast_dir, filename)
         if not os.path.exists(filepath): return None
+        
+        run_date_obj = datetime.strptime(run_date_str, '%Y-%m-%d').date()
+
         try:
             with xr.open_dataset(filepath) as ds:
                 x_dim = "longitude" if "longitude" in ds.coords else "lon"
                 y_dim = "latitude" if "latitude" in ds.coords else "lat"
+                
                 ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
                 ds.rio.write_crs("epsg:4326", inplace=True)
                 ds = ds.sortby([y_dim, x_dim])
                 
-                clipped = ds.rio.clip(station_gdf.geometry, station_gdf.crs, drop=True, all_touched=True)
+                # Geometry Health Check inside the clipper
+                clipped = ds.rio.clip(station_gdf.geometry.buffer(0), station_gdf.crs, drop=True, all_touched=True)
                 target_var = next((v for v in ['tp', 'thickness_of_rainfall_amount', 'precipitation'] if v in clipped), None)
                 if not target_var: return None
 
@@ -71,18 +76,31 @@ class Command(BaseCommand):
                 if ds[target_var].attrs.get('units') != 'mm':
                     data_array = data_array * 1000
 
-                # Resample sub-daily data to 24-hour daily totals
-                daily_ds = data_array.resample(time='1D').sum()
+                # Determine if we need to resample sub-daily data
+                if len(data_array.indexes['time']) > 15:
+                    daily_ds = data_array.resample(time='1D').sum()
+                else:
+                    daily_ds = data_array
 
                 daily_rainfall = {}
                 weights = np.cos(np.deg2rad(daily_ds[y_dim]))
-                for ts in list(daily_ds.indexes['time']):
-                    step_data = daily_ds.sel(time=ts)
+                
+                # Assign dates: Handle Day-0 Offset
+                for idx, ts in enumerate(list(daily_ds.indexes['time'])):
+                    step_data = daily_ds.isel(time=idx)
                     mean_val = step_data.weighted(weights).mean(dim=[x_dim, y_dim]).item()
-                    daily_rainfall[ts.strftime('%Y-%m-%d')] = round(mean_val if not math.isnan(mean_val) else 0.0, 4)
+                    
+                    # If Index 0 is the 29th, it represents the 28th's rain
+                    if idx == 0 and ts.date() > run_date_obj:
+                        key_date = run_date_str
+                    else:
+                        key_date = ts.strftime('%Y-%m-%d')
+                    
+                    daily_rainfall[key_date] = round(mean_val if not math.isnan(mean_val) else 0.0, 4)
                 
                 return daily_rainfall
-        except Exception: return None
+        except Exception:
+            return None
 
     def get_observed_rainfall(self, station_gdf, given_date):
         daily_precip = {}
@@ -96,7 +114,7 @@ class Command(BaseCommand):
                     with xr.open_dataset(filepath) as ds:
                         ds.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=True).rio.write_crs("epsg:4326", inplace=True)
                         ds = ds.sortby(['lat', 'lon'])
-                        clipped = ds.rio.clip(station_gdf.geometry, station_gdf.crs, drop=True, all_touched=True)
+                        clipped = ds.rio.clip(station_gdf.geometry.buffer(0), station_gdf.crs, drop=True, all_touched=True)
                         weights = np.cos(np.deg2rad(clipped.lat))
                         val = clipped['precipitation'].weighted(weights).mean().item()
                         daily_precip[obs_date.strftime('%Y-%m-%d')] = val
@@ -117,8 +135,7 @@ class Command(BaseCommand):
         start_dt = pd.to_datetime(given_date).normalize()
         forecast_range = [start_dt + timedelta(days=i) for i in range(10)]
         
-        all_required_dates = sorted(list(set(combined_df.index).union(set(forecast_range))))
-        combined_df = combined_df.reindex(all_required_dates, fill_value=0)
+        combined_df = combined_df.reindex(sorted(list(set(combined_df.index).union(set(forecast_range)))), fill_value=0)
         
         for p_date in forecast_range:
             daily_probs = {}
@@ -136,7 +153,6 @@ class Command(BaseCommand):
         return probability_results
 
     def save_to_database(self, results, prediction_date, basin_id):
-        if not results: return
         rows = []
         h_meta = results.get("Hours", {})
         t_meta = results.get("Threshold", {})
@@ -157,10 +173,8 @@ class Command(BaseCommand):
             UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.bulk_create(rows)
 
     def run_forecast_for_date(self, date_input):
-        self.stdout.write(self.style.SUCCESS(f'--- UKMET Pre-Monsoon Probabilistic Processing: {date_input} ---'))
+        self.stdout.write(self.style.SUCCESS(f'--- UKMET Probabilistic Pre-Monsoon: {date_input} ---'))
         success = False
-        
-        # Diagnostics
         peak_prob = 0.0
         peak_info = "N/A"
         risk_categories = {"CRITICAL (>=75%)": [], "WARNING (50-74%)": [], "WATCH (10-49%)": []}
@@ -172,12 +186,15 @@ class Command(BaseCommand):
             json_path = os.path.join(settings.BASE_DIR, 'assets', 'floodForecastStations', f'{station_name}.json')
             if not os.path.exists(json_path): continue
             
+            # --- GEOMETRY GUARD ---
             station_gdf = gpd.read_file(json_path, crs="epsg:4326")
+            if station_gdf.empty or station_gdf.geometry.iloc[0] is None or station_gdf.geometry.iloc[0].is_empty:
+                self.stdout.write(self.style.ERROR(f"  ❌ Skipping {station_name}: Geometry is empty or invalid."))
+                continue
+
             all_members_data = []
-            # UKMet Ensemble has 18 members (00 to 17)
             for i in range(18):
-                filename = f'precip_EN{str(i).zfill(2)}.nc'
-                res = self.process_ensemble_member(station_gdf, forecast_dir, filename)
+                res = self.process_ensemble_member(station_gdf, forecast_dir, f'precip_EN{str(i).zfill(2)}.nc', date_input)
                 if res: all_members_data.append(res)
             
             if not all_members_data: continue
@@ -191,29 +208,27 @@ class Command(BaseCommand):
                 self.save_to_database(response, date_input, basin_id)
                 success = True
                 
-                for date_key, probs in response.items():
-                    if date_key in ["Hours", "Threshold"]: continue
+                for d_key, probs in response.items():
+                    if d_key in ["Hours", "Threshold"]: continue
                     for idx_str, val in probs.items():
                         if val > peak_prob:
                             peak_prob = val
-                            peak_info = f"{station_name.upper()} ({response['Hours'][idx_str]}h) on {date_key}"
+                            peak_info = f"{station_name.upper()} ({response['Hours'][idx_str]}h) on {d_key}"
                         
-                        alert = {'basin': station_name.upper(), 'date': date_key, 'hour': response['Hours'][idx_str], 'prob': val}
+                        alert = {'basin': station_name.upper(), 'date': d_key, 'hour': response['Hours'][idx_str], 'prob': val}
                         if val >= 75: risk_categories["CRITICAL (>=75%)"].append(alert)
                         elif val >= 50: risk_categories["WARNING (50-74%)"].append(alert)
                         elif val >= 10: risk_categories["WATCH (10-49%)"].append(alert)
                 
                 self.stdout.write(f"  ✅ Processed {station_name}")
 
-        # --- FINAL SUMMARY LOG ---
+        # --- SUMMARY LOG ---
         self.stdout.write("\n" + "═"*60)
-        self.stdout.write(self.style.SUCCESS(f"🏁 RUN COMPLETE: {date_input}"))
-        
         any_risk = False
         for label, items in risk_categories.items():
             if items:
                 any_risk = True
-                self.stdout.write(f"\n{label}:")
+                self.stdout.write(self.style.WARNING(f"\n{label}:"))
                 for i in sorted(items, key=lambda x: (x['prob'], x['date']), reverse=True)[:5]:
                     self.stdout.write(f"  - {i['basin']}: {i['prob']}% ({i['hour']}h) on {i['date']}")
 

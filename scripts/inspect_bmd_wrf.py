@@ -1,68 +1,75 @@
 import xarray as xr
+import numpy as np
 import os
-import sys
+from datetime import datetime
 
-def inspect_wrf_file(file_path):
-    print(f"--- Inspecting BMD WRF File: {os.path.basename(file_path)} ---\n")
-    
-    if not os.path.exists(file_path):
-        print(f"ERROR: File not found at {file_path}")
+# Adjust the date to a file you have in your directory
+FDATE = "20260328"
+NC_PATH = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/bmd_wrf/wrf_out_{FDATE}00.nc"
+
+def inspect_wrf():
+    if not os.path.exists(NC_PATH):
+        print(f"❌ File not found: {NC_PATH}")
         return
 
-    try:
-        # Open dataset
-        ds = xr.open_dataset(file_path)
+    print(f"🔍 Inspecting BMD-WRF File: {os.path.basename(NC_PATH)}")
+    print("="*60)
+    
+    # Open dataset
+    ds = xr.open_dataset(NC_PATH)
+    
+    # 1. Coordinate Check
+    print(f"📍 Coordinates: {list(ds.coords)}")
+    for coord in ds.coords:
+        size = ds.coords[coord].size
+        vmin = ds.coords[coord].values.min()
+        vmax = ds.coords[coord].values.max()
+        print(f"   - {coord:10}: size={size}, range=[{vmin}, {vmax}]")
+
+    # 2. Time Step Analysis
+    print(f"\n📅 Time Step Analysis:")
+    times = ds.time.values
+    print(f"   - Total Steps: {len(times)}")
+    print(f"   - Start Time : {times[0]}")
+    print(f"   - End Time   : {times[-1]}")
+    
+    if len(times) > 1:
+        diff = (times[1] - times[0]).astype('timedelta64[h]').astype(int)
+        print(f"   - Frequency  : Every {diff} hours")
+        # BMD-WRF logic usually looks for index 8 (24h mark)
+        if len(times) >= 9:
+            print(f"   - Checkpoint : Index 8 (24h mark) is {times[8]}")
+
+    # 3. Variable Analysis (Rainfall)
+    print(f"\n🌧️  Rainfall Variables:")
+    # rainc = convective, rainnc = non-convective
+    rain_vars = [v for v in ['rainc', 'rainnc'] if v in ds.data_vars]
+    
+    if rain_vars:
+        for v in rain_vars:
+            attrs = ds[v].attrs
+            print(f"   - Variable '{v}':")
+            print(f"     * Units: {attrs.get('units', 'N/A')}")
+            print(f"     * Shape: {ds[v].shape}")
         
-        # 1. Show Data Variables
-        # Look specifically for 'RAINC' (Cumulus) and 'RAINNC' (Non-Convective)
-        print("1. DATA VARIABLES:")
-        rainfall_vars = ['RAINC', 'RAINNC', 'precip', 'tp', 'precip_total']
-        for var in ds.data_vars:
-            if var in rainfall_vars or "RAIN" in var:
-                print(f"   [!] Rainfall Candidate -> {var}")
-                print(f"       Units: {ds[var].attrs.get('units', 'N/A')}")
-                print(f"       Description: {ds[var].attrs.get('long_name', 'N/A')}")
-            else:
-                # Just list other variables briefly
-                pass
+        # Behavior Check (Cumulative?)
+        total_rain = ds['rainc'] + ds['rainnc']
+        mean_start = total_rain.isel(time=0).mean().item()
+        mean_end = total_rain.isel(time=-1).mean().item()
         
-        print(f"\n   (Total variables found: {len(ds.data_vars)})")
+        print(f"\n📈 Accumulation Check (Mean across grid):")
+        print(f"   - Start: {mean_start:.4f} mm")
+        print(f"   - End  : {mean_end:.4f} mm")
+        
+        if mean_end >= mean_start:
+            print("   - Result : ✅ Data appears CUMULATIVE (Subtraction required)")
+        else:
+            print("   - Result : ⚠️ Warning: Values decreasing. Check logic.")
+    else:
+        print("   ❌ Rainfall variables (rainc/rainnc) not found!")
 
-        # 2. Show Coordinates
-        print("\n2. COORDINATES / DIMENSIONS:")
-        for coord in ds.coords:
-            vals = ds[coord].values
-            print(f"   - {coord}: {len(vals)} values from {vals.min()} to {vals.max()}")
-
-        # 3. Check for XLAT / XLONG (Common in WRF)
-        if 'XLAT' in ds.variables or 'XLONG' in ds.variables:
-            print("\n3. WRF GRID CHECK:")
-            # WRF often uses 2D lat/lon arrays (Time, South_North, West_East)
-            lat_var = 'XLAT' if 'XLAT' in ds.variables else 'XLAT_M'
-            lon_var = 'XLONG' if 'XLONG' in ds.variables else 'XLONG_M'
-            
-            if lat_var in ds.variables:
-                lats = ds[lat_var].values
-                print(f"   - {lat_var} range: {lats.min()} to {lats.max()}")
-            if lon_var in ds.variables:
-                lons = ds[lon_var].values
-                print(f"   - {lon_var} range: {lons.min()} to {lons.max()}")
-
-        # 4. Check Time
-        if 'time' in ds.coords or 'XTIME' in ds.variables:
-            print("\n4. TIME RANGE:")
-            # Some WRF files use 'XTIME', others 'time'
-            time_key = 'time' if 'time' in ds.coords else 'XTIME'
-            times = ds.indexes.get(time_key, ds[time_key].values)
-            print(f"   - Start: {times[0]}")
-            print(f"   - End:   {times[-1]}")
-            print(f"   - Total Steps: {len(times)}")
-
-        ds.close()
-
-    except Exception as e:
-        print(f"An error occurred during inspection: {str(e)}")
+    ds.close()
+    print("="*60)
 
 if __name__ == "__main__":
-    path = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/bmd_wrf/wrf_out_2026031700.nc"
-    inspect_wrf_file(path)
+    inspect_wrf()

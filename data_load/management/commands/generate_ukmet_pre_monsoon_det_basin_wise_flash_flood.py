@@ -4,6 +4,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import geopandas as gpd
+import warnings
 from datetime import datetime, timedelta
 
 from django.conf import settings
@@ -11,6 +12,9 @@ from django.core.management import BaseCommand
 from django.utils import timezone
 
 from data_load.models import UKMetPreMonsoonBasinWiseFlashFloodForecast
+
+# Suppress the buffer warning for geographic CRS to keep logs clean
+warnings.filterwarnings("ignore", message="Geometry is in a geographic CRS.")
 
 # --- Pre-Monsoon Configuration ---
 STATION_DICT = { 
@@ -63,43 +67,45 @@ class Command(BaseCommand):
 
         try:
             with xr.open_dataset(forecast_file) as ds:
-                # Use standard names found in inspection
+                # 1. Coordinate Handling
                 x_dim = "longitude" if "longitude" in ds.coords else "lon"
                 y_dim = "latitude" if "latitude" in ds.coords else "lat"
                 
-                ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
-                ds.rio.write_crs("epsg:4326", inplace=True)
-                ds = ds.sortby([y_dim, x_dim])
+                # Explicitly standardize to 'x' and 'y' to prevent "x dimension not found" errors
+                da = ds.rename({x_dim: 'x', y_dim: 'y'})
+                da.rio.set_spatial_dims(x_dim='x', y_dim='y', inplace=True)
+                da.rio.write_crs("epsg:4326", inplace=True)
+                da = da.sortby(['y', 'x'])
                 
-                # Geometry Sanitizer
-                geom = station_gdf.geometry.buffer(0)
-                clipped = ds.rio.clip(geom, station_gdf.crs, drop=True, all_touched=True)
+                # 2. Geometry Sanitizer & Clipping
+                clipped = da.rio.clip(station_gdf.geometry.buffer(0.01), station_gdf.crs, drop=True, all_touched=True)
                 
                 target_var = next((v for v in ['tp', 'thickness_of_rainfall_amount', 'precipitation'] if v in clipped), None)
                 if not target_var: return {}
 
                 data_array = clipped[target_var]
+                if ds[target_var].attrs.get('units') != 'mm':
+                    data_array = data_array * 1000
+
                 daily_rainfall = {}
-                weights = np.cos(np.deg2rad(data_array[y_dim]))
+                weights = np.cos(np.deg2rad(data_array.y))
                 
-                # --- DAY-0 RECOVERY LOGIC ---
+                # --- 3. DAY-0 RECOVERY LOGIC ---
                 for idx, ts in enumerate(list(data_array.indexes['time'])):
                     step_data = data_array.isel(time=idx)
-                    mean_val = step_data.weighted(weights).mean(dim=[x_dim, y_dim]).item()
+                    mean_val = step_data.weighted(weights).mean(dim=['x', 'y']).item()
                     
                     # If Index 0 is tomorrow, map it to the Run Date (Today)
                     if idx == 0 and ts.date() > run_date_obj:
                         key_date = run_date_obj.strftime('%Y-%m-%d')
                     else:
-                        # Otherwise, shift logically or use the timestamp
-                        # (Adjust based on how many steps you want to recover)
-                        key_date = (ts - timedelta(days=1)).strftime('%Y-%m-%d')
+                        key_date = ts.strftime('%Y-%m-%d')
                     
                     daily_rainfall[key_date] = round(mean_val if not math.isnan(mean_val) else 0.0, 4)
                 
                 return daily_rainfall
         except Exception as e:
-            print(f"Error processing {station_name}: {e}")
+            print(f"Error processing forecast for {station_name}: {e}")
             return {}
 
     def get_observed_rainfall(self, station_name, given_date):
@@ -116,13 +122,22 @@ class Command(BaseCommand):
             if os.path.exists(filepath):
                 try:
                     with xr.open_dataset(filepath) as ds:
-                        ds.rio.set_spatial_dims(x_dim="lon", y_dim="lat", inplace=True).rio.write_crs("epsg:4326", inplace=True)
-                        ds = ds.sortby(['lat', 'lon'])
-                        clipped = ds.rio.clip(station_gdf.geometry, station_gdf.crs, drop=True, all_touched=True)
-                        weights = np.cos(np.deg2rad(clipped.lat))
-                        val = clipped['precipitation'].weighted(weights).mean().item()
+                        # Standardize global observed file coordinates
+                        ds_std = ds.rename({'lon': 'x', 'lat': 'y'})
+                        ds_std.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
+                        ds_std.rio.write_crs("epsg:4326", inplace=True)
+                        ds_std = ds_std.sortby(['y', 'x'])
+                        
+                        # Use variable specifically to avoid coordinate metadata issues
+                        clipped = ds_std['precipitation'].rio.clip(station_gdf.geometry.buffer(0.01), station_gdf.crs, drop=True, all_touched=True)
+                        weights = np.cos(np.deg2rad(clipped.y))
+                        val = clipped.weighted(weights).mean().item()
+                        
                         daily_precip[obs_date.strftime('%Y-%m-%d')] = val
-                except: pass
+                except: 
+                    daily_precip[obs_date.strftime('%Y-%m-%d')] = 0.0
+            else:
+                daily_precip[obs_date.strftime('%Y-%m-%d')] = 0.0
         return daily_precip
 
     def run_forecast_for_date(self, date_input):
@@ -152,10 +167,9 @@ class Command(BaseCommand):
                     total_rain = sum(combined_norm.get(d, 0.0) for d in sum_range)
                     day_results[idx] = round(total_rain, 2)
                     
-                    # Track Global Peak for Diagnostics
                     if total_rain > global_peak_val:
                         global_peak_val = total_rain
-                        peak_info = f"{station_name.upper()} ({total_rain}mm vs {threshold}mm) on {p_date.date()}"
+                        peak_info = f"{station_name.upper()} ({total_rain}mm) on {p_date.date()}"
 
                     if total_rain >= threshold and (p_date >= forecast_start):
                         high_risk_summary.append({
@@ -167,9 +181,9 @@ class Command(BaseCommand):
             if results:
                 self.save_to_database(results, date_input, basin_id)
                 success = True
-                self.stdout.write(f"  Processed {station_name}")
+                self.stdout.write(f"  ✅ Processed {station_name}")
 
-        # Final Summary Log
+        # Final Summary
         self.stdout.write("\n" + "═"*60)
         self.stdout.write(self.style.SUCCESS(f"🏁 PROCESSING COMPLETE: {date_input}"))
         if high_risk_summary:
@@ -177,8 +191,7 @@ class Command(BaseCommand):
             for item in sorted(high_risk_summary, key=lambda x: x['date']):
                 self.stdout.write(f"  - {item['basin']}: {item['val']}mm exceeds {item['thresh']}mm ({item['hour']}h) on {item['date']}")
         else:
-            self.stdout.write(self.style.SUCCESS("✅ No thresholds exceeded."))
-            self.stdout.write(self.style.NOTICE(f"📊 Global Peak Diagnostic: {global_peak_val:.2f}mm in {peak_info}"))
+            self.stdout.write(self.style.SUCCESS(f"✅ No Alerts. Global Peak: {global_peak_val:.2f}mm ({peak_info})"))
         self.stdout.write("═"*60 + "\n")
 
         return success

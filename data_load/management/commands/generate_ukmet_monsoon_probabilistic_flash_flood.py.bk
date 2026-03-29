@@ -1,13 +1,14 @@
 import os
 import math
-from datetime import datetime, timedelta
-
 import geopandas as gpd
 import numpy as np
 import pandas as pd
 import xarray as xr
+from datetime import datetime, timedelta
+
 from django.conf import settings
 from django.core.management import BaseCommand
+from django.utils import timezone
 from rioxarray.exceptions import NoDataInBounds
 
 # Ensure this model exists in your models.py
@@ -47,9 +48,12 @@ class Command(BaseCommand):
         if not date_input:
             date_input = datetime.now().strftime('%Y-%m-%d')
         
+        # Convert YYYYMMDD to YYYY-MM-DD if needed
         if "-" not in date_input:
-            try: date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
-            except: pass
+            try: 
+                date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+            except: 
+                pass
 
         if not self.run_forecast_for_date(date_input):
             yesterday = (datetime.strptime(date_input, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -58,27 +62,44 @@ class Command(BaseCommand):
 
     def process_ensemble_member(self, station_gdf, forecast_dir, filename):
         filepath = os.path.join(forecast_dir, filename)
-        if not os.path.exists(filepath): return None
+        if not os.path.exists(filepath): 
+            return None
         try:
             with xr.open_dataset(filepath) as ds:
                 x_dim = "longitude" if "longitude" in ds.coords else "lon"
                 y_dim = "latitude" if "latitude" in ds.coords else "lat"
+                
                 ds.rio.set_spatial_dims(x_dim=x_dim, y_dim=y_dim, inplace=True)
                 ds.rio.write_crs("epsg:4326", inplace=True)
                 ds = ds.sortby([y_dim, x_dim])
+                
                 clipped = ds.rio.clip(station_gdf.geometry, station_gdf.crs, drop=True, all_touched=True)
                 target_var = next((v for v in ['tp', 'thickness_of_rainfall_amount', 'precipitation'] if v in clipped), None)
-                if not target_var: return None
+                if not target_var: 
+                    return None
+
+                # 1. Handle Units
+                data_array = clipped[target_var]
+                if ds[target_var].attrs.get('units') != 'mm':
+                    data_array = data_array * 1000
+
+                # 2. Resample to Daily Totals (Sums all sub-daily steps)
+                # This fixes the bug where steps were overwriting each other
+                daily_ds = data_array.resample(time='1D').sum()
 
                 daily_rainfall = {}
-                weights = np.cos(np.deg2rad(clipped[y_dim]))
-                for ts in list(clipped.indexes['time']):
-                    step_data = clipped.sel(time=ts)
-                    mean_val = step_data[target_var].weighted(weights).mean(dim=[x_dim, y_dim]).item()
-                    val_mm = mean_val if ds[target_var].attrs.get('units') == 'mm' else mean_val * 1000
-                    daily_rainfall[ts.strftime('%Y-%m-%d')] = round(val_mm if not math.isnan(val_mm) else 0.0, 4)
+                # Use cosine weighting for latitude to ensure spatial accuracy
+                weights = np.cos(np.deg2rad(daily_ds[y_dim]))
+                
+                for ts in list(daily_ds.indexes['time']):
+                    step_data = daily_ds.sel(time=ts)
+                    mean_val = step_data.weighted(weights).mean(dim=[x_dim, y_dim]).item()
+                    daily_rainfall[ts.strftime('%Y-%m-%d')] = round(mean_val if not math.isnan(mean_val) else 0.0, 4)
+                
                 return daily_rainfall
-        except: return None
+        except Exception as e: 
+            print(f"Error processing member {filename}: {e}")
+            return None
 
     def get_observed_rainfall(self, station_gdf, given_date):
         daily_precip = {}
@@ -86,7 +107,9 @@ class Command(BaseCommand):
         for i in range(1, 11):
             obs_date = given_dt - timedelta(days=i)
             filename = f"{obs_date.year}{obs_date.timetuple().tm_yday:03d}.nc"
+            # Adjust this path to your absolute directory for observed files
             filepath = os.path.join(settings.BASE_DIR, "observed", filename)
+            
             if os.path.exists(filepath):
                 try:
                     with xr.open_dataset(filepath) as ds:
@@ -94,47 +117,49 @@ class Command(BaseCommand):
                         ds = ds.sortby(['lat', 'lon'])
                         clipped = ds.rio.clip(station_gdf.geometry, station_gdf.crs, drop=True, all_touched=True)
                         weights = np.cos(np.deg2rad(clipped.lat))
-                        daily_precip[obs_date.strftime('%Y-%m-%d')] = clipped['precipitation'].weighted(weights).mean().item()
-                except: pass
+                        mean_obs = clipped['precipitation'].weighted(weights).mean().item()
+                        daily_precip[obs_date.strftime('%Y-%m-%d')] = mean_obs
+                except: 
+                    pass
         return pd.DataFrame(list(daily_precip.items()), columns=['Date', 'Rainfall'])
 
     def calculate_exceedance_probability(self, all_member_rainfall, thresholds, given_date):
-        if not all_member_rainfall: return {}
+        if not all_member_rainfall: 
+            return {}
+        
         num_members = len(all_member_rainfall)
         threshold_df = pd.DataFrame.from_dict(thresholds, orient='index', columns=['Hours', 'Threshold'])
         
         # Combine all member data
         combined_df = pd.DataFrame(all_member_rainfall).T.fillna(0)
-        combined_df.index = pd.to_datetime(combined_df.index)
+        # NORMALIZE dates to ensure 00:00:00 doesn't cause mismatch
+        combined_df.index = pd.to_datetime(combined_df.index).normalize()
         
-        # --- FIX: Ensure the Run Date and 10 days ahead are in the index ---
-        start_dt = pd.to_datetime(given_date)
+        start_dt = pd.to_datetime(given_date).normalize()
         forecast_range = [start_dt + timedelta(days=i) for i in range(10)]
         
-        # Reindex to include all history + Run Date + Forecast, filling missing with 0
+        # Reindex to include full required timeline
         all_required_dates = sorted(list(set(combined_df.index).union(set(forecast_range))))
         combined_df = combined_df.reindex(all_required_dates, fill_value=0)
         
         probability_results = {}
-        
-        # Only iterate over the 10-day window starting from given_date
         for p_date in forecast_range:
             daily_probs = {}
             for idx, (hour, threshold) in threshold_df.iterrows():
                 days_to_sum = int(hour / 24)
-                # Historical + Forecast window for the specific threshold
-                sum_range = [p_date - timedelta(days=i) for i in range(days_to_sum)]
+                # Create a list of normalized dates to sum for this threshold window
+                sum_range = [(p_date - timedelta(days=i)).normalize() for i in range(days_to_sum)]
                 
-                # Check sums across the days for each member
                 try:
+                    # Sum values across the time window for every member at once
                     member_sums = combined_df.loc[sum_range].sum(axis=0)
-                    exceed_count = (member_sums > threshold).sum()
+                    # Count how many members exceed the specific basin threshold
+                    exceed_count = (member_sums >= threshold).sum()
                     daily_probs[idx] = round((exceed_count / num_members) * 100, 2)
-                except KeyError:
-                    daily_probs[idx] = 0.0 # Safety fallback
+                except Exception:
+                    daily_probs[idx] = 0.0
             
-            if daily_probs:
-                probability_results[p_date.strftime('%Y-%m-%d')] = daily_probs
+            probability_results[p_date.strftime('%Y-%m-%d')] = daily_probs
                 
         return {
             "Hours": threshold_df['Hours'].to_dict(), 
@@ -143,10 +168,13 @@ class Command(BaseCommand):
         }
 
     def save_to_database(self, data_dict, prediction_date, basin_id):
-        if not data_dict or "Hours" not in data_dict: return
+        if not data_dict or "Hours" not in data_dict: 
+            return
+        
         rows = []
         for date_key, values in data_dict.items():
-            if date_key in ["Hours", "Thresholds"]: continue
+            if date_key in ["Hours", "Thresholds"]: 
+                continue
             for index, value in values.items():
                 rows.append(UKMetMonsoonProbabilisticFlashFloodForecast(
                     prediction_date=prediction_date,
@@ -156,8 +184,13 @@ class Command(BaseCommand):
                     thresholds=data_dict["Thresholds"][index],
                     value=value if not math.isnan(value) else 0.0
                 ))
+        
         if rows:
-            UKMetMonsoonProbabilisticFlashFloodForecast.objects.filter(prediction_date=prediction_date, basin_id=basin_id).delete()
+            # Clean up existing forecast for this specific run to prevent duplicates
+            UKMetMonsoonProbabilisticFlashFloodForecast.objects.filter(
+                prediction_date=prediction_date, 
+                basin_id=basin_id
+            ).delete()
             UKMetMonsoonProbabilisticFlashFloodForecast.objects.bulk_create(rows)
 
     def run_forecast_for_date(self, date_input):
@@ -168,27 +201,39 @@ class Command(BaseCommand):
 
         for basin_id, station_name in STATION_DICT.items():
             json_path = os.path.join(settings.BASE_DIR, 'assets', 'floodForecastStations', f'{station_name}.json')
-            if not os.path.exists(json_path): continue
+            if not os.path.exists(json_path): 
+                continue
+            
             station_gdf = gpd.read_file(json_path, crs="epsg:4326")
 
-            all_members = []
+            all_members_data = []
             for i in range(18):
                 res = self.process_ensemble_member(station_gdf, forecast_dir, f'precip_EN{i:02d}.nc')
-                if res: all_members.append(res)
+                if res: 
+                    all_members_data.append(res)
 
-            if not all_members: continue
+            if not all_members_data: 
+                continue
 
+            # Load past rainfall to calculate multi-day cumulative thresholds
             obs_df = self.get_observed_rainfall(station_gdf, date_input)
             obs_dict = dict(zip(obs_df['Date'], obs_df['Rainfall']))
             
+            # Enrich each member's forecast with historical observations
             enriched_members = []
-            for member_rain in all_members:
-                # Merge historical obs into each member
+            for member_rain in all_members_data:
                 enriched_members.append({**obs_dict, **member_rain})
 
-            response = self.calculate_exceedance_probability(enriched_members, STATION_THRESHOLDS[basin_id], date_input)
+            # Calculate the final percentage probabilities
+            response = self.calculate_exceedance_probability(
+                enriched_members, 
+                STATION_THRESHOLDS[basin_id], 
+                date_input
+            )
+            
             if response:
                 self.save_to_database(response, date_input, basin_id)
                 success = True
                 self.stdout.write(f"  Processed {station_name}")
+        
         return success

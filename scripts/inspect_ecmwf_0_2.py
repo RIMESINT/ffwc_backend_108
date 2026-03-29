@@ -4,7 +4,7 @@ import numpy as np
 import os
 
 # Target file path
-NC_FILE = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_0_2/25032026.nc"
+NC_FILE = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_0_2/28032026.nc"
 
 def perform_inspection(file_path):
     if not os.path.exists(file_path):
