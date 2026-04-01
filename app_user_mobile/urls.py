@@ -11,9 +11,6 @@ from app_user_mobile.views import (
 
 
 
-
-
-
 urlpatterns = [
     path('send-otp/', SendOTPView.as_view(), name='send_otp'),
     path('verify-otp/', VerifyOTPView.as_view(), name='verify_otp'),

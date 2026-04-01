@@ -1,6 +1,6 @@
 import requests
 import json
-
+import time
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from rest_framework.views import APIView
@@ -9,7 +9,8 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from datetime import timedelta
-
+import paramiko
+import shlex
 
 from app_user_mobile.models import (
     MobileAuthUser, OTP,
@@ -60,48 +61,150 @@ class BulkSMSClient:
             return None
 
 
+# class SendOTPView(APIView):
+#     def post(self, request):
+#         serializer = SendOTPSerializer(data=request.data)
+#         if serializer.is_valid():
+#             mobile_number = serializer.validated_data['mobile_number']
+            
+#             mobile_user_count = MobileAuthUser.objects.filter(
+#                 mobile_number = mobile_number
+#             ).count()
+#             if mobile_user_count < 1:
+#                 return Response({
+#                     'message': f'{mobile_number} is unauthorized. Please contact with Admin',  
+#                 }, status=status.HTTP_200_OK)
+            
+#             # Generate OTP
+#             otp_instance = OTP.generate_otp(mobile_number)
+            
+#             with open(ECMWF_BASE_URL / 'env.json', 'r') as envf:
+#                 env_ = json.load(envf)
+#             BULK_SMS_CONF = env_['bulk_sms_send']
+#             url = BULK_SMS_CONF["URL"]    
+#             api_key = BULK_SMS_CONF["API_KEY"]    
+#             senderid = BULK_SMS_CONF["SENDER_ID"] 
+            
+#             sms_client = BulkSMSClient(
+#                 api_key=api_key,
+#                 senderid=senderid,
+#                 url=url
+#             )
+
+#             # response = sms_client.send_otp("017XXXXXXXX", "123456")
+#             response = sms_client.send_otp(mobile_number, otp_instance.otp)
+#             response_dict = json.loads(response)
+#             # print(response_dict)
+            
+#             return Response({
+#                 'message': 'OTP sent successfully',
+#                 'otp': otp_instance.otp,  # Remove this in production
+#                 'sender_response': response_dict,  # Remove this in production
+#             }, status=status.HTTP_200_OK)
+            
+#         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 class SendOTPView(APIView):
+    def gen_client_trans_id(self):
+        return f"TXN{int(time.time() * 1000)}"
+
     def post(self, request):
         serializer = SendOTPSerializer(data=request.data)
-        if serializer.is_valid():
-            mobile_number = serializer.validated_data['mobile_number']
-            
-            mobile_user_count = MobileAuthUser.objects.filter(
-                mobile_number = mobile_number
-            ).count()
-            if mobile_user_count < 1:
-                return Response({
-                    'message': f'{mobile_number} is unauthorized. Please contact with Admin',  
-                }, status=status.HTTP_200_OK)
-            
-            # Generate OTP
-            otp_instance = OTP.generate_otp(mobile_number)
-            
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        mobile_number = serializer.validated_data['mobile_number']
+        
+        # 1. Authorization check
+        if MobileAuthUser.objects.filter(mobile_number=mobile_number).count() < 1:
+            return Response({
+                'message': f'{mobile_number} is unauthorized.'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+        # 2. Generate OTP
+        otp_instance = OTP.generate_otp(mobile_number)
+        otp_text = f"Your OTP is: {otp_instance.otp}"
+
+        # 3. Load Config
+        try:
             with open(ECMWF_BASE_URL / 'env.json', 'r') as envf:
                 env_ = json.load(envf)
-            BULK_SMS_CONF = env_['bulk_sms_send']
-            url = BULK_SMS_CONF["URL"]    
-            api_key = BULK_SMS_CONF["API_KEY"]    
-            senderid = BULK_SMS_CONF["SENDER_ID"] 
-            
-            sms_client = BulkSMSClient(
-                api_key=api_key,
-                senderid=senderid,
-                url=url
+            gp_conf = env_['gp_sms_conf']
+            ssh_conf = env_['bdserver_site_235_ssh_conf']
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+        # 4. Prepare Payload
+        payload_json = json.dumps({
+            "username": gp_conf["username"],
+            "password": gp_conf["password"],
+            "apicode": gp_conf["apicode"],
+            "msisdn": [str(mobile_number)],
+            "countrycode": "880",
+            "cli": gp_conf["cli"],
+            "messagetype": "1",
+            "message": otp_text,
+            "clienttransid": self.gen_client_trans_id(),
+            "bill_msisdn": gp_conf["bill_msisdn"],
+            "tran_type": gp_conf["tran_type"],
+            "request_type": gp_conf["request_type"],
+            "rn_code": gp_conf["rn_code"]
+        })
+
+        # 5. SSH Bridge Execution
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=ssh_conf["HOST"],
+                username=ssh_conf["USER"],
+                password=ssh_conf["PASSWORD"],
+                look_for_keys=False,
+                allow_agent=False,
+                timeout=20
             )
 
-            # response = sms_client.send_otp("017XXXXXXXX", "123456")
-            response = sms_client.send_otp(mobile_number, otp_instance.otp)
-            response_dict = json.loads(response)
-            # print(response_dict)
+            curl_cmd = f"curl -s -X POST {gp_conf['url']} -H 'Content-Type: application/json' -d {shlex.quote(payload_json)}"
+            stdin, stdout, stderr = ssh.exec_command(curl_cmd)
+            response_raw = stdout.read().decode().strip()
+            ssh.close()
+
+            if not response_raw:
+                return Response({'message': 'No response from Gateway'}, status=502)
+
+            # 6. Transform GP response to your desired format
+            gp_data = json.loads(response_raw)
+            status_info = gp_data.get('statusInfo', {})
             
+            # Map GP values to your custom keys
+            raw_code = status_info.get('statusCode', '0')
+            description = status_info.get('errordescription', '')
+            
+            # Logic: If code is 1000, it's a success message, otherwise it's an error message
+            is_success = (raw_code == "1000")
+            
+            mapped_response = {
+                "response_code": int(raw_code),
+                "success_message": description if is_success else "",
+                "error_message": "" if is_success else description
+            }
+
             return Response({
-                'message': 'OTP sent successfully',
-                'otp': otp_instance.otp,  # Remove this in production
-                'sender_response': response_dict,  # Remove this in production
+                "message": "OTP sent successfully" if is_success else "OTP sending failed",
+                "otp": otp_instance.otp,
+                "sender_response": mapped_response
             }, status=status.HTTP_200_OK)
-            
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            return Response({
+                "message": "Bridge connection error",
+                "sender_response": {
+                    "response_code": 500,
+                    "success_message": "",
+                    "error_message": str(e)
+                }
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class VerifyOTPView(APIView):
