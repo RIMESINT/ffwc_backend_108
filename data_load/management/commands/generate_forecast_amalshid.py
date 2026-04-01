@@ -83,6 +83,8 @@ class Command(BaseCommand):
             p50 = df[ensemble_cols].quantile(0.50, axis=1).round(3).tolist()
             p75 = df[ensemble_cols].quantile(0.75, axis=1).round(3).tolist()
 
+            formatted_date = datetime.strptime(final_date_folder, "%Y%m%d").strftime("%Y-%m-%d")
+
             # 7. Final JSON Construction
             output_data = {
                 "code": "success",
@@ -90,9 +92,10 @@ class Command(BaseCommand):
                 "metadata": {
                     "station_id": 'SW172',
                     "basin_name": "Kushiyara River (Amalshid)",
-                    "forecast_date": final_date_folder,
+                    "forecast_date": formatted_date,
                     "run_datetime": run_datetime,
                     "dc_unit": "m³/s",
+                    "dl":"1800",
                     "pb_unit": "%"
                 },
                 "data": {

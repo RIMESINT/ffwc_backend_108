@@ -115,17 +115,16 @@ class SendOTPView(APIView):
 
         mobile_number = serializer.validated_data['mobile_number']
         
-        # 1. Authorization check
         if MobileAuthUser.objects.filter(mobile_number=mobile_number).count() < 1:
             return Response({
                 'message': f'{mobile_number} is unauthorized.'
             }, status=status.HTTP_403_FORBIDDEN)
 
-        # 2. Generate OTP
+
         otp_instance = OTP.generate_otp(mobile_number)
         otp_text = f"Your OTP is: {otp_instance.otp}"
 
-        # 3. Load Config
+   
         try:
             with open(ECMWF_BASE_URL / 'env.json', 'r') as envf:
                 env_ = json.load(envf)
@@ -134,7 +133,7 @@ class SendOTPView(APIView):
         except Exception as e:
             return Response({'error': str(e)}, status=500)
 
-        # 4. Prepare Payload
+
         payload_json = json.dumps({
             "username": gp_conf["username"],
             "password": gp_conf["password"],
@@ -151,7 +150,7 @@ class SendOTPView(APIView):
             "rn_code": gp_conf["rn_code"]
         })
 
-        # 5. SSH Bridge Execution
+
         ssh = paramiko.SSHClient()
         ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         
@@ -173,15 +172,14 @@ class SendOTPView(APIView):
             if not response_raw:
                 return Response({'message': 'No response from Gateway'}, status=502)
 
-            # 6. Transform GP response to your desired format
             gp_data = json.loads(response_raw)
             status_info = gp_data.get('statusInfo', {})
             
-            # Map GP values to your custom keys
+
             raw_code = status_info.get('statusCode', '0')
             description = status_info.get('errordescription', '')
             
-            # Logic: If code is 1000, it's a success message, otherwise it's an error message
+
             is_success = (raw_code == "1000")
             
             mapped_response = {
