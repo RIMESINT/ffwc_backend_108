@@ -17,14 +17,12 @@ from app_visualization.models import (
 from ffwc_django_project.project_constant import app_visualization
 
 # Constants
+# Changed to index [4] to correspond with BMDWRF basin_specific source intent
 SYSTEM_STATE_NAME_BMD = app_visualization['system_state_name'][4]
 BMDWRF_BASE_URL = settings.BASE_DIR
 
 def r2(val):
-    """Rounding helper, ensures no negative results due to precision"""
-    if val is None or np.isnan(val):
-        return 0.0
-    return max(0.0, round(float(val), 2))
+    return round(val, 2) if val is not None else 0.0
 
 class Command(BaseCommand):
     help = 'Process BMDWRF NetCDF into ForecastDaily for Source ID 4 (BMDWRF)'
@@ -33,6 +31,7 @@ class Command(BaseCommand):
         parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
 
     def to_pydt(self, cf_date):
+        """Helper to convert netCDF cftime objects to standard python datetime"""
         return pydt.datetime(cf_date.year, cf_date.month, cf_date.day, 
                              cf_date.hour, cf_date.minute, cf_date.second)
 
@@ -48,7 +47,7 @@ class Command(BaseCommand):
         times = ncf.variables['time']
         dates_raw = num2date(times[:], times.units, times.calendar)
         
-        # Rainfall calculation (Accumulated)
+        # Rainfall calculation
         rf_total = ncf.variables['rainc'][:] + ncf.variables['rainnc'][:]
         rf_obj = Parameter.objects.get(name='rf')
 
@@ -65,18 +64,17 @@ class Command(BaseCommand):
                 pys = scissor(shape_obj, lats, lons)
                 weight_grid = pys.get_masked_weight() 
 
-                # --- Process 10 Days ---
+                # Process 10 Days
                 upazila_data_daily = []
                 for day in range(10):
                     day_start_idx = (day) * 8
                     day_end_idx   = (day + 1) * 8
                     
+                    # Convert cftime to Timezone-Aware Python Datetime
                     dt_start = timezone.make_aware(self.to_pydt(dates_raw[day_start_idx]))
                     dt_end   = timezone.make_aware(self.to_pydt(dates_raw[day_end_idx]))
 
-                    # FIX: Use np.maximum to clip negative values to 0
-                    diff = rf_total[day_end_idx, 0, :, :] - rf_total[day_start_idx, 0, :, :]
-                    rf_day = np.maximum(0, diff)
+                    rf_day = rf_total[day_end_idx, 0, :, :] - rf_total[day_start_idx, 0, :, :]
                     
                     rf_day_masked  = np.ma.masked_array(rf_day, mask=weight_grid.mask)
                     rf_max_val_day = rf_day_masked.max()
@@ -98,17 +96,14 @@ class Command(BaseCommand):
                 if upazila_data_daily:
                     ForecastDaily.objects.bulk_create(upazila_data_daily)
 
-                # --- Process 3-Hourly Steps ---
+                # Process 3-Hourly Steps
                 upazila_data_steps = []
                 for t_step in range(0, 32):
                     s_idx, e_idx = t_step, t_step + 1
                     dt_s = timezone.make_aware(self.to_pydt(dates_raw[s_idx]) + delt(hours=6))
                     dt_e = timezone.make_aware(self.to_pydt(dates_raw[e_idx]) + delt(hours=6))
 
-                    # FIX: Use np.maximum to clip negative values to 0
-                    diff_step = rf_total[e_idx, 0, :, :] - rf_total[s_idx, 0, :, :]
-                    rf_step = np.maximum(0, diff_step)
-                    
+                    rf_step = rf_total[e_idx, 0, :, :] - rf_total[s_idx, 0, :, :]
                     rf_avg_step = np.average(rf_step, weights=weight_grid)
 
                     upazila_data_steps.append(ForecastSteps(
@@ -143,11 +138,17 @@ class Command(BaseCommand):
     def main(self, date_str):
         forecast_date = dt.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d') 
         
+        # TARGET SOURCE ID 4 (BMDWRF / basin_specific)
         try:
             source_obj = Source.objects.get(pk=4)
         except Source.DoesNotExist:
-            source_obj = Source.objects.get(name='BMDWRF', source_type="basin_specific")
+            # Fallback by name/type if ID is not exactly 4
+            source_obj = Source.objects.get(
+                name='BMDWRF', 
+                source_type="basin_specific"
+            )
 
+        # Get the directory path directly from source_obj (ID 4)
         nc_dir = source_obj.source_path
         nc_loc = os.path.join(BMDWRF_BASE_URL, nc_dir.strip('/'), f'wrf_out_{date_str}00.nc')
         
