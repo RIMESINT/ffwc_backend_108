@@ -12,6 +12,14 @@ from datetime import timedelta
 import paramiko
 import shlex
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.authentication import SessionAuthentication
+
+
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
+
 from data_load.models import RainfallStation, RainfallObservation
 from django.utils.dateparse import parse_date
 
@@ -31,6 +39,10 @@ from app_user_mobile.authentication import (
     MobileJWTAuthentication,
     
 )
+
+
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
 
 from django.conf import settings
 ECMWF_BASE_URL = settings.BASE_DIR
@@ -447,3 +459,117 @@ def get_sms_list(request):
 
 
 
+
+
+# Add to app_user_mobile/views.py
+
+# from .serializers import VendorWLPushSerializer
+from .services import process_vendor_wl_logic # Ensure this service is created as discussed
+from .authentication import StaticTokenAuthentication
+from .services import process_bulk_water_level
+from .serializers import VendorBulkPushSerializer
+
+class VendorWLPushAPIView(APIView):
+    authentication_classes = [StaticTokenAuthentication, JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # Use the new Bulk Serializer
+        serializer = VendorBulkPushSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            v_data = serializer.validated_data
+            mode = v_data.get('mode', 'fill_missing')
+            data_list = v_data['data']
+            
+            # Call the updated bulk service logic
+            success, result = process_bulk_water_level(data_list, mode)
+            
+            if success:
+                return Response({
+                    "status": "Success", 
+                    "processed_records": result['total'],
+                    "details": result['details']
+                }, status=status.HTTP_201_CREATED)
+            
+            return Response({"status": "Failed", "message": result}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+from .services import process_bulk_rainfall_data
+class VendorRainfallPushAPIView(APIView):
+    """
+    API endpoint for vendors to push Rainfall data.
+    """
+    authentication_classes = [StaticTokenAuthentication, JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = VendorBulkPushSerializer(data=request.data)
+        if serializer.is_valid():
+            mode = serializer.validated_data.get('mode', 'fill_missing')
+            data_list = serializer.validated_data['data']
+            
+            # Call the Rainfall service
+            success, result = process_bulk_rainfall_data(data_list, mode)
+            
+            return Response({
+                "status": "Success",
+                "table": "RainfallObservation",
+                "processed_records": result['total'],
+                "details": result['details']
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+class VendorWLHourlyPushAPIView(APIView):
+    """
+    API endpoint specifically for Hourly Water Level syncs.
+    """
+    authentication_classes = [StaticTokenAuthentication, JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = VendorBulkPushSerializer(data=request.data)
+        if serializer.is_valid():
+            mode = serializer.validated_data.get('mode', 'fill_missing')
+            data_list = serializer.validated_data['data']
+            
+            # Reusing the Water Level service logic
+            success, result = process_bulk_water_level(data_list, mode)
+            
+            return Response({
+                "status": "Hourly Sync Completed",
+                "processed_records": result['total'],
+                "details": result['details']
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VendorRainfallHourlyPushAPIView(APIView):
+    """
+    API endpoint specifically for Hourly Rainfall syncs.
+    """
+    authentication_classes = [StaticTokenAuthentication, JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = VendorBulkPushSerializer(data=request.data)
+        if serializer.is_valid():
+            mode = serializer.validated_data.get('mode', 'fill_missing')
+            data_list = serializer.validated_data['data']
+            
+            # Reusing the Rainfall service logic (inserts into RainfallObservation)
+            success, result = process_bulk_rainfall_data(data_list, mode)
+            
+            return Response({
+                "status": "Hourly Rainfall Sync Completed",
+                "processed_records": result['total'],
+                "details": result['details']
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

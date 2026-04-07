@@ -312,5 +312,8 @@ urlpatterns = [
     
     # Sunamganj
     path('basin-wise-forecast/sunamganj/latest/', views.get_latest_sunamganj_forecast, name='sunamganj_latest'),
+
+    # Parshuram (Feni River)
+    path('basin-wise-forecast/parshuram/latest/', views.get_latest_parshuram_forecast, name='parshuram_latest'),
     
 ]
