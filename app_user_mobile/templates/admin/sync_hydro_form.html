@@ -1,0 +1,124 @@
+{% extends "admin/base_site.html" %}
+
+{% block content %}
+<div id="content-main">
+    <div class="module" id="form-container">
+        <h2>Syncing Parameters</h2>
+        <form id="sync-form" method="POST">
+            {% csrf_token %}
+            <fieldset class="module aligned">
+                {% for field in form %}
+                <div class="form-row">
+                    {{ field.errors }}
+                    <label>{{ field.label }}:</label> {{ field }}
+                </div>
+                {% endfor %}
+            </fieldset>
+            <div class="submit-row">
+                <input type="submit" value="Start Sync" class="default" id="start-btn">
+            </div>
+        </form>
+    </div>
+
+    <div class="module" id="progress-container" style="display:none; margin-top:20px; padding:15px;">
+        <h2>Sync Progress</h2>
+        <div style="background:#eee; border-radius:10px; overflow:hidden; margin-bottom:10px;">
+            <div id="progress-bar" style="width:0%; height:20px; background:#417690; transition: width 0.3s;"></div>
+        </div>
+        <p id="progress-text">Initializing...</p>
+        
+        <div id="console-output" style="background:#000; color:#0f0; font-family:monospace; padding:15px; height:400px; overflow-y:scroll; border-radius:5px; font-size:12px; line-height:1.5;">
+            > Waiting for output...<br>
+        </div>
+        
+        <div class="submit-row">
+            <a href="." class="closelink" id="back-btn" style="display:none;">Sync Complete - Click to Refresh</a>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.getElementById('sync-form').onsubmit = function(e) {
+        e.preventDefault();
+        
+        const form = e.target;
+        const formData = new FormData(form);
+        const consoleDiv = document.getElementById('console-output');
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        const progressContainer = document.getElementById('progress-container');
+        const startBtn = document.getElementById('start-btn');
+    
+        // Show Progress UI, Hide Form
+        progressContainer.style.display = 'block';
+        form.style.opacity = '0.5';
+        startBtn.disabled = true;
+        consoleDiv.innerHTML = '> Connection established...<br>';
+    
+        fetch(window.location.href, {
+            method: 'POST',
+            body: formData,
+        }).then(response => {
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let totalItems = 0;
+    
+            function read() {
+                reader.read().then(({done, value}) => {
+                    if (done) {
+                        document.getElementById('back-btn').style.display = 'inline-block';
+                        return;
+                    }
+    
+                    const chunk = decoder.decode(value);
+                    const lines = chunk.split('\n');
+    
+                    lines.forEach(line => {
+                        if (line.startsWith('DATA:START:')) {
+                            totalItems = parseInt(line.replace('DATA:START:', ''));
+                            progressText.innerText = `Total SMS to process: ${totalItems}`;
+                        } else if (line.startsWith('DATA:PROGRESS:')) {
+                            const current = parseInt(line.replace('DATA:PROGRESS:', ''));
+                            const percent = (current / totalItems) * 100;
+                            progressBar.style.width = percent + '%';
+                            progressText.innerText = `Processing SMS ${current} of ${totalItems}`;
+                        } else if (line.startsWith('DATA:MSG:')) {
+                            let msg = line.replace('DATA:MSG:', '');
+                            
+                            // --- COLORING LOGIC ---
+                            // Match [FAILED] and wrap in red
+                            if (msg.includes('[FAILED]')) {
+                                msg = msg.replace('[FAILED]', '<span style="color: #ff4d4d; font-weight: bold;">[FAILED]</span>');
+                            }
+                            
+                            // Match MATCHED] and wrap the whole bracketed tag in green
+                            // This handles [RF MATCHED] and [WL MATCHED]
+                            if (msg.includes('MATCHED]')) {
+                                msg = msg.replace(/\[(RF|WL) MATCHED\]/g, '<span style="color: #2ecc71; font-weight: bold;">[$1 MATCHED]</span>');
+                            }
+    
+                            // Optional: Color the SMS ID lines blue
+                            if (msg.includes('[Processing SMS ID:')) {
+                                msg = `<span style="color: #3498db;">${msg}</span>`;
+                            }
+    
+                            consoleDiv.innerHTML += msg.replace(/\n/g, '<br>') + '<br>';
+                            consoleDiv.scrollTop = consoleDiv.scrollHeight;
+                        } else if (line.startsWith('DATA:COMPLETE:')) {
+                            consoleDiv.innerHTML += '<br><span style="color:white; font-weight:bold;">' + line.replace('DATA:COMPLETE:', '') + '</span>';
+                        }
+                    });
+                    read();
+                });
+            }
+            read();
+        });
+    };
+    </script>
+
+<style>
+    .form-row { padding: 12px; border-bottom: 1px solid #eee; }
+    #console-output::-webkit-scrollbar { width: 8px; }
+    #console-output::-webkit-scrollbar-thumb { background: #444; border-radius: 4px; }
+</style>
+{% endblock %}

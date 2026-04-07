@@ -12,6 +12,13 @@ from datetime import timedelta
 import paramiko
 import shlex
 
+from data_load.models import RainfallStation, RainfallObservation
+from django.utils.dateparse import parse_date
+
+
+from django.conf import settings
+from django.http import JsonResponse
+
 from app_user_mobile.models import (
     MobileAuthUser, OTP,
     FCMTokenWiseUpdatedLatLon,
@@ -27,11 +34,6 @@ from app_user_mobile.authentication import (
 
 from django.conf import settings
 ECMWF_BASE_URL = settings.BASE_DIR
-
-
-
-
-
 
 
 
@@ -329,3 +331,119 @@ class SimpleFCMTokenLocationAPI(APIView):
             "lat": location_record.lat,
             "long": location_record.long
         }, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)
+
+
+
+
+
+# Leotech-Rimes-SMS - API VIEW
+
+
+def get_hydro_data(request):
+    """
+    Fetches Hydro Data. 
+    URL format: /api/hydro-data/?station_id=SW351&from_date=2026-03-01&to_date=2026-03-15
+    """
+    # 1. Capture query parameters
+    station_id = request.GET.get('station_id')
+    from_date = request.GET.get('from_date')
+    to_date = request.GET.get('to_date')
+
+    # 2. Validation: Ensure no parameters are missing
+    if not all([station_id, from_date, to_date]):
+        return JsonResponse({
+            "error": "Missing required query parameters",
+            "required": ["station_id", "from_date", "to_date"]
+        }, status=400)
+
+    # 3. Setup External Request
+    url = f"{settings.FFWC_BASE_URL}/station_wise_data_by_date_range.php"
+    headers = {"Authorization": f"Bearer {settings.FFWC_TOKEN}"}
+    payload = {
+        "station_id": station_id,
+        "from_date": from_date,
+        "to_date": to_date
+    }
+
+    try:
+        # FFWC expects form-data (data=payload)
+        response = requests.post(url, headers=headers, data=payload, timeout=15)
+        return JsonResponse(response.json(), safe=False)
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({"error": "FFWC API connection failed", "details": str(e)}, status=502)
+
+def get_hydro_hourly_data(request):
+    """
+    Acts as a proxy to fetch hourly data from FFWC API.
+    URL format: /api/hydro-hourly/?station_id=SW351&hour=72
+    """
+    # 1. Capture query parameters from the user's request
+    station_id = request.GET.get('station_id')
+    hour = request.GET.get('hour', 72) # Default to 72 if not provided
+
+    # 2. Validation
+    if not station_id:
+        return JsonResponse({
+            "error": "Missing required query parameter: station_id"
+        }, status=400)
+
+    # 3. Setup External Request to FFWC
+    # Using the hourly endpoint provided in your Postman example
+    url = f"{settings.FFWC_BASE_URL}/station_wise_data_by_hour_range.php"
+    headers = {"Authorization": f"Bearer {settings.FFWC_TOKEN}"}
+    payload = {
+        "station_id": station_id,
+        "hour": hour
+    }
+
+    try:
+        # Send POST request to FFWC (FFWC APIs usually expect data/form-data)
+        response = requests.post(url, headers=headers, data=payload, timeout=15)
+        
+        # Return the exact JSON response from FFWC back to the user
+        return JsonResponse(response.json(), safe=False)
+        
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({
+            "error": "FFWC API connection failed", 
+            "details": str(e)
+        }, status=502)
+
+
+def get_sms_list(request):
+    """
+    Fetches SMS list.
+    URL format: /api/sms-list/?source=01751330394&datefrom=2025-01-01&dateto=2026-04-08
+    """
+    # 1. Capture query parameters
+    source = request.GET.get('source')
+    date_from = request.GET.get('datefrom')
+    date_to = request.GET.get('dateto')
+
+    # 2. Validation
+    if not all([source, date_from, date_to]):
+        return JsonResponse({
+            "error": "Missing required query parameters",
+            "required": ["source", "datefrom", "dateto"]
+        }, status=400)
+
+    # 3. Setup External Request
+    url = f"{settings.SMS_BASE_URL}/sms/list"
+    payload = {
+        "userid": settings.SMS_USERID,
+        "apikey": settings.SMS_APIKEY,
+        "source": source,
+        "datefrom": date_from,
+        "dateto": date_to
+    }
+
+    try:
+        # SMS API expects raw JSON (json=payload)
+        response = requests.post(url, json=payload, timeout=15)
+        return JsonResponse(response.json(), safe=False)
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({"error": "SMS Gateway unreachable", "details": str(e)}, status=502)
+
+
+
+

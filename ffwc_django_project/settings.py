@@ -256,3 +256,13 @@ CELERY_TIMEZONE = 'Asia/Dhaka' # IMPORTANT: Match your Django TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True # Enable tracking task 'STARTED' state
 CELERY_TASK_STATUS_ON_EXCEPTION = True # Store task state as FAILURE on exception
 
+
+
+# FFWC-RIMES-LEOTECH API Configuration
+FFWC_BASE_URL = "https://sms.ffwc.gov.bd/hydro/api/data_share"
+FFWC_TOKEN = "9f7a71621336b31d92801f394c730470"
+
+# RIMES-FFWC SMS API Configuration
+SMS_BASE_URL = "http://114.31.28.82/api/v1"
+SMS_USERID = "urimes"
+SMS_APIKEY = "9a02481013b31c9d234d1b50f7d81087"

@@ -1,0 +1,10 @@
+{% extends "admin/change_list.html" %}
+{% block object-tools-items %}
+    <li>
+        <a href="execute-sync/" class="addlink" style="background-color: #417690; color: white !important;">Date Range Sync</a>
+    </li>
+    <li>
+        <a href="execute-hourly-sync/" class="addlink" style="background-color: #264b5d; color: white !important;">Hourly Range Sync</a>
+    </li>
+    {{ block.super }}
+{% endblock %}
