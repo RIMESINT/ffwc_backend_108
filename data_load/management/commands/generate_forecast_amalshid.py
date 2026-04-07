@@ -96,7 +96,8 @@ class Command(BaseCommand):
                     "run_datetime": run_datetime,
                     "dc_unit": "m³/s",
                     "dl":"1800",
-                    "pb_unit": "%"
+                    "pb_unit": "%",
+                    "forecast_type":"experimental"
                 },
                 "data": {
                     "date": df[time_col].tolist(),
