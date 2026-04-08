@@ -120,140 +120,92 @@ def update_last_update_date():
 
 @shared_task(bind=True)
 def process_observations_csv(self, csv_data_string, timezone_name):
-    """
-    Celery task to process CSV data with Admin-defined header mapping.
-    Supports error correction by overwriting existing timestamps.
-    """
     try:
-        # Read the file lines
         lines = io.StringIO(csv_data_string).readlines()
         if len(lines) < 3:
-            return {'status': 'failed', 'message': 'CSV file is empty or missing data rows.'}
+            return {'status': 'failed', 'message': 'CSV file is empty or missing rows.'}
 
-        # 1. CLEAN CSV HEADERS (Row 2 in file, index 1)
-        # We strip whitespaces from every header in the CSV
+        # 1. Clean Headers
         raw_headers = lines[1].strip().split(';')
         cleaned_csv_headers = [h.strip() for h in raw_headers]
-        
-        # Extract data rows (Row 3 onwards)
         data_rows = lines[2:]
         reader = csv.DictReader(data_rows, fieldnames=cleaned_csv_headers, delimiter=';')
         
-        # 2. PRE-FETCH ADMIN MAPPINGS FROM DB
-        # We strip whitespaces from the DB values to ensure a clean match
-        wl_stations = Station.objects.exclude(ffdata_header__isnull=True).exclude(ffdata_header='')
-        wl_map = {s.ffdata_header.strip(): s for s in wl_stations}
-        
-        rf_stations = RainfallStation.objects.exclude(header__isnull=True).exclude(header='')
-        rf_map = {rs.header.strip(): rs for rs in rf_stations}
+        # 2. Maps from Admin-defined DB headers
+        wl_map = {s.ffdata_header.strip(): s for s in Station.objects.exclude(ffdata_header__isnull=True).exclude(ffdata_header='')}
+        rf_map = {rs.header.strip(): rs for rs in RainfallStation.objects.exclude(header__isnull=True).exclude(header='')}
 
-        # Timezone setup
-        try:
-            tz = pytz.timezone(timezone_name)
-        except pytz.UnknownTimeZoneError:
-            tz = pytz.timezone(settings.TIME_ZONE)
-
-        # Counters for the summary message
-        wl_in, wl_up, wl_sk = 0, 0, 0
-        rf_in, rf_up, rf_sk = 0, 0, 0
+        tz = pytz.timezone(timezone_name or settings.TIME_ZONE)
+        wl_in, wl_up, rf_in, rf_up = 0, 0, 0, 0
         total_rows = len(data_rows)
+        all_console_logs = []
 
-        # 3. PARSE AND PROCESS ROWS
-        # We use a transaction to ensure all data is saved correctly
         with transaction.atomic():
             for i, row in enumerate(reader):
-                # Update progress every 10 rows
-                if i % 10 == 0:
-                    self.update_state(state='PROGRESS', meta={
-                        'current': i, 'total': total_rows, 'percent': int((i/total_rows)*100),
-                        'message': f'Processing row {i} of {total_rows}...'
-                    })
-
-                # Parse Observation Date
                 date_str = row.get('YYYY-MM-DD HH:MM:SS')
-                if not date_str:
-                    continue
+                if not date_str: continue
+                
                 try:
-                    naive_date = datetime.strptime(date_str.strip(), '%Y-%m-%d %H:%M:%S')
-                    observation_date = tz.localize(naive_date)
-                except (ValueError, TypeError):
-                    continue
+                    observation_date = tz.localize(datetime.strptime(date_str.strip(), '%Y-%m-%d %H:%M:%S'))
+                except: continue
 
-                # --- WATER LEVEL PROCESSING ---
+                # --- Process Water Level ---
                 for csv_header, station_obj in wl_map.items():
                     val = row.get(csv_header)
                     if val and val.strip() != '-9999' and val.strip() != '':
-                        try:
-                            # .update_or_create() handles the Error Correction / Overwrite
-                            # If legacy duplicates exist, we use a safer manual upsert
-                            qs = WaterLevelObservation.objects.filter(
-                                station_id=station_obj,
-                                observation_date=observation_date
-                            )
-                            
-                            num_val = float(val.strip())
-                            
-                            if qs.exists():
-                                # Error Correction: Update existing (takes the first if duplicates exist)
-                                obj = qs.first()
-                                obj.water_level = num_val
-                                obj.save()
-                                wl_up += 1
-                            else:
-                                # New record: Insert
-                                WaterLevelObservation.objects.create(
-                                    station_id=station_obj,
-                                    observation_date=observation_date,
-                                    water_level=num_val
-                                )
-                                wl_in += 1
-                        except ValueError:
-                            wl_sk += 1
+                        num_val = float(val.strip())
+                        qs = WaterLevelObservation.objects.filter(station_id=station_obj, observation_date=observation_date)
+                        
+                        if qs.exists():
+                            obj = qs.first()
+                            obj.water_level = num_val
+                            obj.save()
+                            wl_up += 1
+                            all_console_logs.append(f"WL: {station_obj.name} | {date_str} | {num_val}m | Updated (Correction)")
+                        else:
+                            WaterLevelObservation.objects.create(station_id=station_obj, observation_date=observation_date, water_level=num_val)
+                            wl_in += 1
+                            all_console_logs.append(f"WL: {station_obj.name} | {date_str} | {num_val}m | Created")
 
-                # --- RAINFALL PROCESSING ---
+                # --- Process Rainfall ---
                 for csv_header, rf_station_obj in rf_map.items():
                     val = row.get(csv_header)
                     if val and val.strip() != '-9999' and val.strip() != '':
-                        try:
-                            qs = RainfallObservation.objects.filter(
-                                station_id=rf_station_obj,
-                                observation_date=observation_date
-                            )
-                            
-                            num_val = float(val.strip())
-                            
-                            if qs.exists():
-                                # Error Correction: Update existing
-                                obj = qs.first()
-                                obj.rainfall = num_val
-                                obj.save()
-                                rf_up += 1
-                            else:
-                                # New record: Insert
-                                RainfallObservation.objects.create(
-                                    station_id=rf_station_obj,
-                                    observation_date=observation_date,
-                                    rainfall=num_val
-                                )
-                                rf_in += 1
-                        except ValueError:
-                            rf_sk += 1
+                        num_val = float(val.strip())
+                        qs = RainfallObservation.objects.filter(station_id=rf_station_obj, observation_date=observation_date)
+                        
+                        if qs.exists():
+                            obj = qs.first()
+                            obj.rainfall = num_val
+                            obj.save()
+                            rf_up += 1
+                            all_console_logs.append(f"RF: {rf_station_obj.name} | {date_str} | {num_val}mm | Updated (Correction)")
+                        else:
+                            RainfallObservation.objects.create(station_id=rf_station_obj, observation_date=observation_date, rainfall=num_val)
+                            rf_in += 1
+                            all_console_logs.append(f"RF: {rf_station_obj.name} | {date_str} | {num_val}mm | Created")
 
-        # 4. FINALIZATION
+                # Push to frontend every 5 rows
+                if i % 5 == 0 or i == total_rows - 1:
+                    self.update_state(state='PROGRESS', meta={
+                        'current': i + 1, 
+                        'total': total_rows, 
+                        'percent': int(((i + 1) / total_rows) * 100),
+                        'console_logs': all_console_logs, 
+                        'message': f'Processing row {i+1}...'
+                    })
+
         update_last_update_date()
+        result_message = f'Success! WL: {wl_in+wl_up}, RF: {rf_in+rf_up} processed.'
         
-        result_message = (
-            f"WL: {wl_in} inserted, {wl_up} updated (corrected), {wl_sk} skipped. "
-            f"RF: {rf_in} inserted, {rf_up} updated (corrected), {rf_sk} skipped."
-        )
-        
-        logger.info(f"CSV Processed: {result_message}")
-        return {'status': 'completed', 'message': result_message}
-
+        return {
+            'status': 'completed', 
+            'message': result_message,
+            'console_logs': all_console_logs 
+        }
     except Exception as e:
-        logger.error(f"Critical error during CSV upload: {str(e)}", exc_info=True)
+        logger.error(f"Upload failed: {str(e)}")
         raise e
-
 
 # @shared_task(bind=True)
 # def process_observations_csv(self, csv_data_string, timezone_name):
