@@ -5148,6 +5148,13 @@ def get_latest_cumilla_forecast(request):
         return JsonResponse(data)
     return JsonResponse({"code": "error", "message": "Cumilla data not available."}, status=404)
 
+def get_latest_dalia_forecast(request):
+    json_path = os.path.join(settings.BASE_DIR, 'assets', 'flood-monitor-basin-forecast', 'latest_dalia_forecast.json')
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            return JsonResponse(json.load(f))
+    return JsonResponse({"code": "error", "message": "Dalia data not found."}, status=404)
+    
 def get_forecast_metadata(request):
     """Returns only the forecast date and run time from the latest file."""
     if os.path.exists(JSON_FILE_PATH):

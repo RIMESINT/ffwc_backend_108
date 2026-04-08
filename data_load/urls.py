@@ -316,4 +316,6 @@ urlpatterns = [
     # Parshuram (Feni River)
     path('basin-wise-forecast/parshuram/latest/', views.get_latest_parshuram_forecast, name='parshuram_latest'),
     
+    path('basin-wise-forecast/dalia/latest/', views.get_latest_dalia_forecast, name='dalia_latest'),
+    
 ]
