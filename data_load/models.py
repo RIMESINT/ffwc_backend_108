@@ -257,6 +257,7 @@ class WaterLevelObservation(models.Model):
     class Meta:
         db_table = 'water_level_observations'
         managed = True
+        unique_together = ('station_id', 'observation_date')
         indexes = [
             models.Index(
                 fields=['station_id', '-observation_date'], 

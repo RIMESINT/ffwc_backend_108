@@ -100,213 +100,6 @@ def ffwc_last_update_date_experimental():
         logger.error(f"Error updating FfwcLastUpdateDateExperimental: {e}", exc_info=True)
 
 
-
-# @shared_task(bind=True)
-# def process_observations_csv(self, csv_data_string, timezone_name):
-#     """
-#     Celery task to process CSV data for Water Level and Rainfall Observations.
-#     It performs bulk upsert (update or insert) operations for efficiency.
-#     """
-#     try:
-#         decoded_file = io.StringIO(csv_data_string).readlines()
-
-#         if not decoded_file:
-#             self.update_state(state='FAILURE', meta={'message': 'Uploaded CSV file is empty.'})
-#             return {'status': 'failed', 'message': 'Uploaded CSV file is empty.'}
-
-#         decoded_file_iterator = iter(decoded_file)
-#         try:
-#             next(decoded_file_iterator) # Skip the first row (e.g., "Flood watch;WATER LEVEL;...")
-#         except StopIteration:
-#             self.update_state(state='FAILURE', meta={'message': 'Uploaded CSV file has only a header row (or is empty after skipping).'})
-#             return {'status': 'failed', 'message': 'Uploaded CSV file has only a header row (or is empty after skipping).'}
-
-#         csv_reader = csv.DictReader(decoded_file_iterator, delimiter=';')
-        
-#         # Convert iterator to list to get total_rows and iterate multiple times
-#         rows = list(csv_reader) 
-#         total_rows = len(rows)
-#         if total_rows == 0:
-#             self.update_state(state='FAILURE', meta={'message': 'No data rows found in CSV after skipping header.'})
-#             return {'status': 'failed', 'message': 'No data rows found in CSV after skipping header.'}
-
-#         try:
-#             tz = pytz.timezone(timezone_name)
-#         except pytz.UnknownTimeZoneError:
-#             self.update_state(state='FAILURE', meta={'message': f'Invalid timezone: {timezone_name}'})
-#             return {'status': 'failed', 'message': f'Invalid timezone: {timezone_name}'}
-
-#         # --- Pre-fetch station mappings to avoid N+1 queries ---
-#         # Map ffdata_header to Station object for WaterLevelObservation
-#         station_header_map = {s.ffdata_header: s for s in Station.objects.all() if s.ffdata_header}
-#         # Map header to RainfallStation object for RainfallObservation
-#         rainfall_station_header_map = {rs.header: rs for rs in RainfallStation.objects.all() if rs.header}
-
-#         # --- Data collection lists ---
-#         water_level_observations_to_process = []
-#         rainfall_observations_to_process = []
-        
-#         # --- Counters for final message ---
-#         water_level_inserted_count = 0
-#         water_level_updated_count = 0
-#         water_level_skipped_count = 0
-#         rainfall_inserted_count = 0
-#         rainfall_updated_count = 0
-#         rainfall_skipped_count = 0
-
-#         # --- Phase 1: Parse CSV and Collect Data ---
-#         for i, row in enumerate(rows):
-#             progress_percent = int(((i + 1) / total_rows) * 40) # Use 40% for parsing phase
-#             self.update_state(state='PROGRESS', meta={'current': i + 1, 'total': total_rows, 'percent': progress_percent, 'message': f'Parsing row {i+1} of {total_rows}'})
-
-#             try:
-#                 naive_observation_date = datetime.strptime(row['YYYY-MM-DD HH:MM:SS'], '%Y-%m-%d %H:%M:%S')
-#                 observation_date = tz.localize(naive_observation_date, is_dst=None)
-#             except (KeyError, ValueError) as e:
-#                 print(f"Skipping row {i+1} due to date parsing error: {e}. Data: {row}")
-#                 water_level_skipped_count += 1
-#                 rainfall_skipped_count += 1
-#                 continue # Skip to the next row if date parsing fails
-
-#             # Process water level observations from the row
-#             for header, value in row.items():
-#                 if header.endswith('-3h-WL') and value != '-9999':
-#                     try:
-#                         water_level_value = float(value)
-#                         station = station_header_map.get(header)
-#                         if station:
-#                             water_level_observations_to_process.append({
-#                                 'station_id': station,
-#                                 'observation_date': observation_date,
-#                                 'water_level': water_level_value
-#                             })
-#                         else:
-#                             water_level_skipped_count += 1
-#                     except ValueError:
-#                         water_level_skipped_count += 1
-#                         continue
-
-#                 # Process rainfall observations from the row
-#                 elif header.startswith('RF-') and value != '-9999':
-#                     try:
-#                         rainfall_value = float(value)
-#                         rainfall_station = rainfall_station_header_map.get(header)
-#                         if rainfall_station:
-#                             rainfall_observations_to_process.append({
-#                                 'station_id': rainfall_station,
-#                                 'observation_date': observation_date,
-#                                 'rainfall': rainfall_value
-#                             })
-#                         else:
-#                             rainfall_skipped_count += 1
-#                     except ValueError:
-#                         rainfall_skipped_count += 1
-#                         continue
-
-#         # --- Phase 2: Bulk Upsert within a transaction ---
-#         with transaction.atomic():
-#             # Water Level Observations Upsert
-#             self.update_state(state='PROGRESS', meta={'current': 0, 'total': 1, 'percent': 40, 'message': 'Processing Water Level Observations...'})
-
-#             # Identify existing water level observation keys (station_id__station_id, observation_date)
-#             # Fetch existing objects to prepare for bulk_update
-#             existing_wl_objects_map = {
-#                 (obj.station_id.station_id, obj.observation_date): obj
-#                 for obj in WaterLevelObservation.objects.filter(
-#                     station_id__station_id__in=[d['station_id'].station_id for d in water_level_observations_to_process if d['station_id']],
-#                     observation_date__in=[d['observation_date'] for d in water_level_observations_to_process]
-#                 ).select_related('station_id')
-#             }
-            
-#             water_level_for_create = []
-#             water_level_for_update_list = [] # List of objects to pass to bulk_update
-            
-#             for wl_data in water_level_observations_to_process:
-#                 key = (wl_data['station_id'].station_id, wl_data['observation_date'])
-#                 if key in existing_wl_objects_map:
-#                     obj = existing_wl_objects_map[key]
-#                     # Only add to update list if value changed
-#                     if obj.water_level != wl_data['water_level']:
-#                         obj.water_level = wl_data['water_level']
-#                         water_level_for_update_list.append(obj)
-#                         water_level_updated_count += 1
-#                 else:
-#                     water_level_for_create.append(
-#                         WaterLevelObservation(
-#                             station_id=wl_data['station_id'],
-#                             observation_date=wl_data['observation_date'],
-#                             water_level=wl_data['water_level']
-#                         )
-#                     )
-
-#             if water_level_for_create:
-#                 WaterLevelObservation.objects.bulk_create(water_level_for_create)
-#                 water_level_inserted_count += len(water_level_for_create)
-            
-#             if water_level_for_update_list:
-#                 WaterLevelObservation.objects.bulk_update(water_level_for_update_list, fields=['water_level'])
-
-#             # Rainfall Observations Upsert
-#             self.update_state(state='PROGRESS', meta={'current': 0, 'total': 1, 'percent': 70, 'message': 'Processing Rainfall Observations...'})
-
-#             existing_rf_objects_map = {
-#                 (obj.station_id.id, obj.observation_date): obj
-#                 for obj in RainfallObservation.objects.filter(
-#                     station_id__in=[d['station_id'].id for d in rainfall_observations_to_process if d['station_id']],
-#                     observation_date__in=[d['observation_date'] for d in rainfall_observations_to_process]
-#                 ).select_related('station_id')
-#             }
-
-#             rainfall_for_create = []
-#             rainfall_for_update_list = []
-
-#             for rf_data in rainfall_observations_to_process:
-#                 key = (rf_data['station_id'].id, rf_data['observation_date'])
-#                 if key in existing_rf_objects_map:
-#                     obj = existing_rf_objects_map[key]
-#                     if obj.rainfall != rf_data['rainfall']:
-#                         obj.rainfall = rf_data['rainfall']
-#                         rainfall_for_update_list.append(obj)
-#                         rainfall_updated_count += 1
-#                 else:
-#                     rainfall_for_create.append(
-#                         RainfallObservation(
-#                             station_id=rf_data['station_id'],
-#                             observation_date=rf_data['observation_date'],
-#                             rainfall=rf_data['rainfall']
-#                         )
-#                     )
-            
-#             if rainfall_for_create:
-#                 RainfallObservation.objects.bulk_create(rainfall_for_create)
-#                 rainfall_inserted_count += len(rainfall_for_create)
-
-#             if rainfall_for_update_list:
-#                 RainfallObservation.objects.bulk_update(rainfall_for_update_list, fields=['rainfall'])
-
-#         update_last_update_date() 
-#         # Final success message
-#         result_message = (
-#             f'CSV processed. '
-#             f'Water Level: {water_level_inserted_count} inserted, {water_level_updated_count} updated, {water_level_skipped_count} skipped. '
-#             f'Rainfall: {rainfall_inserted_count} inserted, {rainfall_updated_count} updated, {rainfall_skipped_count} skipped.'
-#         )
-#         self.update_state(state='SUCCESS', meta={'message': result_message, 'percent': 100})
-#         return {'status': 'completed', 'message': result_message}
-
-#     except Exception as e: # <--- CRITICAL CHANGE HERE
-#         import traceback
-#         error_traceback = traceback.format_exc()
-#         error_message_for_log = f'An unexpected error occurred: {e}\n{error_traceback}'
-#         logger.error(error_message_for_log)
-#         self.update_state(state=states.FAILURE, meta={'message': str(e), 'percent': 100}) # Set meta for UI
-#         # CRUCIAL: DO NOT re-raise `e` and DO NOT return a dictionary for failure.
-#         # Returning None ensures meta['result'] is None in the backend,
-#         # preventing exception_to_python from being called on it.
-#         return None
-
-
-
 def update_last_update_date():
     """
     Updates the FfwcLastUpdateDate with the current date.
@@ -325,131 +118,267 @@ def update_last_update_date():
     except Exception as e:
         logger.error(f"Error updating FfwcLastUpdateDate: {e}", exc_info=True)
 
-
-
 @shared_task(bind=True)
 def process_observations_csv(self, csv_data_string, timezone_name):
     """
-    Celery task to process CSV data for Water Level and Rainfall Observations.
+    Celery task to process CSV data with Admin-defined header mapping.
+    Supports error correction by overwriting existing timestamps.
     """
     try:
-        decoded_file = io.StringIO(csv_data_string).readlines()
-        if not decoded_file:
-            return {'status': 'failed', 'message': 'Uploaded CSV file is empty.'}
+        # Read the file lines
+        lines = io.StringIO(csv_data_string).readlines()
+        if len(lines) < 3:
+            return {'status': 'failed', 'message': 'CSV file is empty or missing data rows.'}
 
-        decoded_file_iterator = iter(decoded_file)
-        next(decoded_file_iterator)  # Skip Row 1 (Metadata/Header info)
-
-        csv_reader = csv.DictReader(decoded_file_iterator, delimiter=';')
-        rows = list(csv_reader) 
-        total_rows = len(rows)
+        # 1. CLEAN CSV HEADERS (Row 2 in file, index 1)
+        # We strip whitespaces from every header in the CSV
+        raw_headers = lines[1].strip().split(';')
+        cleaned_csv_headers = [h.strip() for h in raw_headers]
         
+        # Extract data rows (Row 3 onwards)
+        data_rows = lines[2:]
+        reader = csv.DictReader(data_rows, fieldnames=cleaned_csv_headers, delimiter=';')
+        
+        # 2. PRE-FETCH ADMIN MAPPINGS FROM DB
+        # We strip whitespaces from the DB values to ensure a clean match
+        wl_stations = Station.objects.exclude(ffdata_header__isnull=True).exclude(ffdata_header='')
+        wl_map = {s.ffdata_header.strip(): s for s in wl_stations}
+        
+        rf_stations = RainfallStation.objects.exclude(header__isnull=True).exclude(header='')
+        rf_map = {rs.header.strip(): rs for rs in rf_stations}
+
+        # Timezone setup
         try:
             tz = pytz.timezone(timezone_name)
         except pytz.UnknownTimeZoneError:
             tz = pytz.timezone(settings.TIME_ZONE)
 
-        # Pre-fetch station mappings
-        station_header_map = {s.ffdata_header: s for s in Station.objects.all() if s.ffdata_header}
-        rainfall_station_header_map = {rs.header: rs for rs in RainfallStation.objects.all() if rs.header}
-
-        water_level_observations_to_process = []
-        rainfall_observations_to_process = []
-
-        # Counters
+        # Counters for the summary message
         wl_in, wl_up, wl_sk = 0, 0, 0
         rf_in, rf_up, rf_sk = 0, 0, 0
+        total_rows = len(data_rows)
 
-        # Phase 1: Parse Data
-        for i, row in enumerate(rows):
-            if i % 10 == 0: # Update progress every 10 rows
-                self.update_state(state='PROGRESS', meta={
-                    'current': i, 'total': total_rows, 'percent': int((i/total_rows)*50), 
-                    'message': f'Parsing row {i} of {total_rows}'
-                })
-
-            try:
-                # Use the column name exactly as it appears in your snippet
-                naive_date = datetime.strptime(row['YYYY-MM-DD HH:MM:SS'], '%Y-%m-%d %H:%M:%S')
-                observation_date = tz.localize(naive_date)
-            except (KeyError, ValueError):
-                continue
-
-            for header, value in row.items():
-                if value == '-9999' or not value:
-                    continue
-                
-                # Check for Water Level (handles both suffixes)
-                if header.endswith('-3h-WL') or header.endswith('-3hr-WL'):
-                    try:
-                        val = float(value)
-                        station = station_header_map.get(header)
-                        if station:
-                            water_level_observations_to_process.append({
-                                'station_id': station,
-                                'observation_date': observation_date,
-                                'water_level': val
-                            })
-                        else:
-                            wl_sk += 1
-                    except ValueError:
-                        wl_sk += 1
-
-                # Check for Rainfall
-                elif header.startswith('RF-'):
-                    try:
-                        val = float(value)
-                        rf_station = rainfall_station_header_map.get(header)
-                        if rf_station:
-                            rainfall_observations_to_process.append({
-                                'station_id': rf_station,
-                                'observation_date': observation_date,
-                                'rainfall': val
-                            })
-                        else:
-                            rf_sk += 1
-                    except ValueError:
-                        rf_sk += 1
-
-        # Phase 2: Bulk Upsert
+        # 3. PARSE AND PROCESS ROWS
+        # We use a transaction to ensure all data is saved correctly
         with transaction.atomic():
-            self.update_state(state='PROGRESS', meta={'percent': 60, 'message': 'Processing Water Levels...'})
-            
-            # Water Level Logic
-            for data in water_level_observations_to_process:
-                obj, created = WaterLevelObservation.objects.update_or_create(
-                    station_id=data['station_id'],
-                    observation_date=data['observation_date'],
-                    defaults={'water_level': data['water_level']}
-                )
-                if created: wl_in += 1
-                else: wl_up += 1
+            for i, row in enumerate(reader):
+                # Update progress every 10 rows
+                if i % 10 == 0:
+                    self.update_state(state='PROGRESS', meta={
+                        'current': i, 'total': total_rows, 'percent': int((i/total_rows)*100),
+                        'message': f'Processing row {i} of {total_rows}...'
+                    })
 
-            self.update_state(state='PROGRESS', meta={'percent': 80, 'message': 'Processing Rainfall...'})
-            
-            # Rainfall Logic
-            for data in rainfall_observations_to_process:
-                obj, created = RainfallObservation.objects.update_or_create(
-                    station_id=data['station_id'],
-                    observation_date=data['observation_date'],
-                    defaults={'rainfall': data['rainfall']}
-                )
-                if created: rf_in += 1
-                else: rf_up += 1
+                # Parse Observation Date
+                date_str = row.get('YYYY-MM-DD HH:MM:SS')
+                if not date_str:
+                    continue
+                try:
+                    naive_date = datetime.strptime(date_str.strip(), '%Y-%m-%d %H:%M:%S')
+                    observation_date = tz.localize(naive_date)
+                except (ValueError, TypeError):
+                    continue
 
-        update_last_update_date() 
+                # --- WATER LEVEL PROCESSING ---
+                for csv_header, station_obj in wl_map.items():
+                    val = row.get(csv_header)
+                    if val and val.strip() != '-9999' and val.strip() != '':
+                        try:
+                            # .update_or_create() handles the Error Correction / Overwrite
+                            # If legacy duplicates exist, we use a safer manual upsert
+                            qs = WaterLevelObservation.objects.filter(
+                                station_id=station_obj,
+                                observation_date=observation_date
+                            )
+                            
+                            num_val = float(val.strip())
+                            
+                            if qs.exists():
+                                # Error Correction: Update existing (takes the first if duplicates exist)
+                                obj = qs.first()
+                                obj.water_level = num_val
+                                obj.save()
+                                wl_up += 1
+                            else:
+                                # New record: Insert
+                                WaterLevelObservation.objects.create(
+                                    station_id=station_obj,
+                                    observation_date=observation_date,
+                                    water_level=num_val
+                                )
+                                wl_in += 1
+                        except ValueError:
+                            wl_sk += 1
+
+                # --- RAINFALL PROCESSING ---
+                for csv_header, rf_station_obj in rf_map.items():
+                    val = row.get(csv_header)
+                    if val and val.strip() != '-9999' and val.strip() != '':
+                        try:
+                            qs = RainfallObservation.objects.filter(
+                                station_id=rf_station_obj,
+                                observation_date=observation_date
+                            )
+                            
+                            num_val = float(val.strip())
+                            
+                            if qs.exists():
+                                # Error Correction: Update existing
+                                obj = qs.first()
+                                obj.rainfall = num_val
+                                obj.save()
+                                rf_up += 1
+                            else:
+                                # New record: Insert
+                                RainfallObservation.objects.create(
+                                    station_id=rf_station_obj,
+                                    observation_date=observation_date,
+                                    rainfall=num_val
+                                )
+                                rf_in += 1
+                        except ValueError:
+                            rf_sk += 1
+
+        # 4. FINALIZATION
+        update_last_update_date()
         
         result_message = (
-            f"WL: {wl_in} inserted, {wl_up} updated, {wl_sk} skipped. "
-            f"RF: {rf_in} inserted, {rf_up} updated, {rf_sk} skipped."
+            f"WL: {wl_in} inserted, {wl_up} updated (corrected), {wl_sk} skipped. "
+            f"RF: {rf_in} inserted, {rf_up} updated (corrected), {rf_sk} skipped."
         )
-        self.update_state(state='SUCCESS', meta={'message': result_message, 'percent': 100})
+        
+        logger.info(f"CSV Processed: {result_message}")
         return {'status': 'completed', 'message': result_message}
 
     except Exception as e:
-        logger.error(f"Upload failed: {e}", exc_info=True)
-        self.update_state(state=states.FAILURE, meta={'message': str(e), 'percent': 100})
-        return None
+        logger.error(f"Critical error during CSV upload: {str(e)}", exc_info=True)
+        raise e
+
+
+# @shared_task(bind=True)
+# def process_observations_csv(self, csv_data_string, timezone_name):
+#     """
+#     Celery task to process CSV data for Water Level and Rainfall Observations.
+#     """
+#     try:
+#         decoded_file = io.StringIO(csv_data_string).readlines()
+#         if not decoded_file:
+#             return {'status': 'failed', 'message': 'Uploaded CSV file is empty.'}
+
+#         decoded_file_iterator = iter(decoded_file)
+#         next(decoded_file_iterator)  # Skip Row 1 (Metadata/Header info)
+
+#         csv_reader = csv.DictReader(decoded_file_iterator, delimiter=';')
+#         rows = list(csv_reader) 
+#         total_rows = len(rows)
+        
+#         try:
+#             tz = pytz.timezone(timezone_name)
+#         except pytz.UnknownTimeZoneError:
+#             tz = pytz.timezone(settings.TIME_ZONE)
+
+#         # Pre-fetch station mappings
+#         station_header_map = {s.ffdata_header: s for s in Station.objects.all() if s.ffdata_header}
+#         rainfall_station_header_map = {rs.header: rs for rs in RainfallStation.objects.all() if rs.header}
+
+#         water_level_observations_to_process = []
+#         rainfall_observations_to_process = []
+
+#         # Counters
+#         wl_in, wl_up, wl_sk = 0, 0, 0
+#         rf_in, rf_up, rf_sk = 0, 0, 0
+
+#         # Phase 1: Parse Data
+#         for i, row in enumerate(rows):
+#             if i % 10 == 0: # Update progress every 10 rows
+#                 self.update_state(state='PROGRESS', meta={
+#                     'current': i, 'total': total_rows, 'percent': int((i/total_rows)*50), 
+#                     'message': f'Parsing row {i} of {total_rows}'
+#                 })
+
+#             try:
+#                 # Use the column name exactly as it appears in your snippet
+#                 naive_date = datetime.strptime(row['YYYY-MM-DD HH:MM:SS'], '%Y-%m-%d %H:%M:%S')
+#                 observation_date = tz.localize(naive_date)
+#             except (KeyError, ValueError):
+#                 continue
+
+#             for header, value in row.items():
+#                 if value == '-9999' or not value:
+#                     continue
+                
+#                 # Check for Water Level (handles both suffixes)
+#                 if header.endswith('-3h-WL') or header.endswith('-3hr-WL'):
+#                     try:
+#                         val = float(value)
+#                         station = station_header_map.get(header)
+#                         if station:
+#                             water_level_observations_to_process.append({
+#                                 'station_id': station,
+#                                 'observation_date': observation_date,
+#                                 'water_level': val
+#                             })
+#                         else:
+#                             wl_sk += 1
+#                     except ValueError:
+#                         wl_sk += 1
+
+#                 # Check for Rainfall
+#                 elif header.startswith('RF-'):
+#                     try:
+#                         val = float(value)
+#                         rf_station = rainfall_station_header_map.get(header)
+#                         if rf_station:
+#                             rainfall_observations_to_process.append({
+#                                 'station_id': rf_station,
+#                                 'observation_date': observation_date,
+#                                 'rainfall': val
+#                             })
+#                         else:
+#                             rf_sk += 1
+#                     except ValueError:
+#                         rf_sk += 1
+
+#         # Phase 2: Bulk Upsert
+#         with transaction.atomic():
+#             self.update_state(state='PROGRESS', meta={'percent': 60, 'message': 'Processing Water Levels...'})
+            
+#             # Water Level Logic
+#             for data in water_level_observations_to_process:
+#                 obj, created = WaterLevelObservation.objects.update_or_create(
+#                     station_id=data['station_id'],
+#                     observation_date=data['observation_date'],
+#                     defaults={'water_level': data['water_level']}
+#                 )
+#                 if created: wl_in += 1
+#                 else: wl_up += 1
+
+#             self.update_state(state='PROGRESS', meta={'percent': 80, 'message': 'Processing Rainfall...'})
+            
+#             # Rainfall Logic
+#             for data in rainfall_observations_to_process:
+#                 obj, created = RainfallObservation.objects.update_or_create(
+#                     station_id=data['station_id'],
+#                     observation_date=data['observation_date'],
+#                     defaults={'rainfall': data['rainfall']}
+#                 )
+#                 if created: rf_in += 1
+#                 else: rf_up += 1
+
+#         update_last_update_date() 
+        
+#         result_message = (
+#             f"WL: {wl_in} inserted, {wl_up} updated, {wl_sk} skipped. "
+#             f"RF: {rf_in} inserted, {rf_up} updated, {rf_sk} skipped."
+#         )
+#         self.update_state(state='SUCCESS', meta={'message': result_message, 'percent': 100})
+#         return {'status': 'completed', 'message': result_message}
+
+#     except Exception as e:
+#         logger.error(f"Upload failed: {e}", exc_info=True)
+#         # self.update_state(state=states.FAILURE, meta={'message': str(e), 'percent': 100})
+#         raise e
+#         # return None
 
         
 # --- import_forecast_files task ---
@@ -549,6 +478,8 @@ def import_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, 
         
         # We need a single, isolated transaction to avoid race conditions
         with transaction.atomic():
+
+
             station_ids_to_fetch = {data['station_id_val'] for data in parsed_forecast_data}
             station_objects_map = {s.station_id: s for s in Station.objects.filter(station_id__in=station_ids_to_fetch)}
     

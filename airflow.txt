@@ -1,0 +1,11 @@
+# 1. Stop everything
+pkill -f airflow
+
+# 2. Go to your project
+cd ~/airflow_project
+source airflow_env/bin/activate
+export AIRFLOW_HOME=~/airflow_project
+
+# 3. Restart the components
+airflow webserver --port 8080 -D
+airflow scheduler -D
