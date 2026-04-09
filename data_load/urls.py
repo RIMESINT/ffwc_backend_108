@@ -317,5 +317,9 @@ urlpatterns = [
     path('basin-wise-forecast/parshuram/latest/', views.get_latest_parshuram_forecast, name='parshuram_latest'),
     
     path('basin-wise-forecast/dalia/latest/', views.get_latest_dalia_forecast, name='dalia_latest'),
+
+
+    # path('json/save/', views.save_json_file, name='save_json_file'),
+    # path('json/load/', views.load_json_file, name='load_json_file'),
     
 ]

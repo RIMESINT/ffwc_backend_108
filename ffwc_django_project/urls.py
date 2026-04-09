@@ -20,6 +20,7 @@ urlpatterns = [
 
     path('', views.home_view, name='home'),
     path('user-auth/', include('userauth.urls')),
+    path('fileuploads/', include('fileuploads.urls')),
     path('data_load/', include('data_load.urls')),
     path('indian-stations/', include('indian_stations.urls')),
     
