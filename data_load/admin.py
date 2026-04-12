@@ -88,7 +88,7 @@ class CustomUserAdmin(UserAdmin):
     list_filter = ('is_staff', 'is_active', 'groups')
     search_fields = ('username', 'email')
     fieldsets = (
-        (None, {'fields': ('username', 'password')}),
+        (None, {'fields': ('username',  )}),
         ('Personal Info', {'fields': ('first_name', 'last_name', 'email')}),
         ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
