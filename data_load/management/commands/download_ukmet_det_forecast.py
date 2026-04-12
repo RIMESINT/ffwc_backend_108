@@ -28,7 +28,7 @@ class Command(BaseCommand):
         # 2. Configuration
         source_host = "203.156.108.110"
         source_user = "nazmul"
-        source_pass = "YOUR_PASSWORD"  # Replace with actual password
+        source_pass = "rootbeer77"  
         
         # Local destination
         local_dir = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_det_data/"

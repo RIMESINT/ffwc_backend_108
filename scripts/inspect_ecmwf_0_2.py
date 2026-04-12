@@ -1,60 +1,67 @@
 import xarray as xr
-import pandas as pd
 import numpy as np
-import os
+import pandas as pd
+import sys
 
-# Target file path
-NC_FILE = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_0_2/28032026.nc"
+# --- Path to your ECMWF file ---
+ECMWF_FILE = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_0_2/10042026.nc'
 
-def perform_inspection(file_path):
-    if not os.path.exists(file_path):
-        print(f"Error: File not found at {file_path}")
-        return
+def inspect_ecmwf():
+    print("="*60)
+    print(f"INSPECTING ECMWF DATA: {os.path.basename(ECMWF_FILE)}")
+    print("="*60)
 
-    # Open dataset
-    ds = xr.open_dataset(file_path)
-    
-    print(f"🔍 Dataset Summary: {os.path.basename(file_path)}")
-    print("=" * 60)
-    print(ds)
-    print("-" * 60)
+    try:
+        # Open dataset
+        ds = xr.open_dataset(ECMWF_FILE)
+        
+        # 1. Basic Structure
+        print("\n[1] DATASET STRUCTURE")
+        print(ds)
 
-    # 1. Coordinate Check
-    print("\n📍 Coordinate Ranges:")
-    for coord in ds.coords:
-        print(f"  {coord:10}: min={ds[coord].min().values}, max={ds[coord].max().values}, length={ds[coord].size}")
-
-    # 2. Time Step Analysis
-    print("\n📅 First 5 Time Steps:")
-    for t in ds.time.values[:5]:
-        print(f"  {pd.to_datetime(t)}")
-
-    # 3. Precipitation Variable Detection & Cumulative Test
-    print("\n🧪 Variable Analysis:")
-    found_vars = [v for v in ['tp', 'cp', 'lsp', 'precip'] if v in ds.data_vars]
-    
-    if not found_vars:
-        print("  ❌ No precipitation variables found.")
-    else:
-        for var in found_vars:
-            data = ds[var]
-            v_min = float(data.min())
-            v_max = float(data.max())
+        # 2. Variable Investigation
+        print("\n[2] VARIABLE DETAILS")
+        for var in ds.data_vars:
+            attrs = ds[var].attrs
+            dtype = ds[var].dtype
+            print(f"\nVariable: {var}")
+            print(f"  - Units: {attrs.get('units', 'N/A')}")
+            print(f"  - Long Name: {attrs.get('long_name', 'N/A')}")
+            print(f"  - Data Type: {dtype}")
             
-            # Check for cumulative behavior
-            # If the mean value of the last time step is significantly higher than the first, it's cumulative
-            first_mean = float(data.isel(time=0).mean())
-            last_mean = float(data.isel(time=-1).mean())
-            is_cumulative = last_mean > first_mean and last_mean > 0
-            
-            print(f"  Variable: '{var}'")
-            print(f"    - Units:      {data.attrs.get('units', 'Unknown')}")
-            print(f"    - Max Value:  {v_max}")
-            print(f"    - Mean Start: {first_mean}")
-            print(f"    - Mean End:   {last_mean}")
-            print(f"    - Behavior:   {'✅ CUMULATIVE' if is_cumulative else '🕒 INCREMENTAL'}")
+            # Sample stats to check for zero/nulls
+            sample = ds[var].isel(time=0).values
+            print(f"  - Min/Max (Step 0): {np.nanmin(sample):.6f} / {np.nanmax(sample):.6f}")
 
-    ds.close()
+        # 3. Coordinate Check
+        print("\n[3] COORDINATES & GRID")
+        lats = ds.latitude.values
+        lons = ds.longitude.values
+        print(f"  - Lat Range: {lats.min()} to {lats.max()} (Resolution: {abs(lats[1]-lats[0])})")
+        print(f"  - Lon Range: {lons.min()} to {lons.max()} (Resolution: {abs(lons[1]-lons[0])})")
+
+        # 4. Time Resolution
+        print("\n[4] TIME STEPS")
+        time_vals = pd.to_datetime(ds.time.values)
+        print(f"  - Start Time: {time_vals[0]}")
+        print(f"  - End Time:   {time_vals[-1]}")
+        if len(time_vals) > 1:
+            diff = (time_vals[1] - time_vals[0]).total_seconds() / 3600
+            print(f"  - Frequency:  {diff} hourly")
+
+        # 5. Accumulation Logic Check
+        # If max value increases over time, it is accumulated.
+        if 'cp' in ds.data_vars:
+            first_max = ds['cp'].isel(time=0).max().values
+            last_max = ds['cp'].isel(time=-1).max().values
+            if last_max > first_max:
+                print("\n[ALERT] 'cp' variable appears to be ACCUMULATED (Bucket).")
+            else:
+                print("\n[ALERT] 'cp' variable appears to be INSTANTANEOUS.")
+
+    except Exception as e:
+        print(f"ERROR: Could not inspect file. {e}")
 
 if __name__ == "__main__":
-    perform_inspection(NC_FILE)
+    import os
+    inspect_ecmwf()

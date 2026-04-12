@@ -24,10 +24,10 @@ class Command(BaseCommand):
                 self.stderr.write(self.style.ERROR(f"Invalid date format: {date_input}"))
                 return
 
-        # 2. Configuration
+        # 
         source_host = "203.156.108.110"
         source_user = "nazmul"
-        source_pass = "YOUR_PASSWORD"  # Replace with actual password
+        source_pass = "rootbeer77"  
         
         # Local destination
         local_base_dir = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_ens_data/"
