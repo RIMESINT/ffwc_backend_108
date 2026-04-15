@@ -381,7 +381,7 @@ class ObservedWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
         # If still no data, fetch last 30 days for all valid stations
         if not queryset.exists():
             queryset =models.WaterLevelObservation.objects.filter(
-                observation_date__gte=entry_date_time - timedelta(days=60),
+                observation_date__gte=entry_date_time - timedelta(days=10),
                 station_id__isnull=False
             ).order_by('station_id__station_serial_no', '-observation_date').distinct()
             # ).order_by('station_id__station_id', '-observation_date').distinct()
@@ -444,7 +444,7 @@ class ObservedWaterlevelByStationAndDateViewSet(viewsets.ReadOnlyModelViewSet):
                 station_id__station_id=station_id,
                 station_id__isnull=False,
                 station_id__station_id__in=models.Station.objects.values('station_id'),
-                observation_date__gte=start_datetime-timedelta(days=40),
+                observation_date__gte=start_datetime-timedelta(days=10),
                 observation_date__lte=end_datetime-timedelta(days=0)
             ).order_by('-observation_date')
 
@@ -1330,7 +1330,8 @@ class RecentObservedWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
         except models.WaterLevelObservation.DoesNotExist:
             return JsonResponse({}, safe=False)
 
-        one_day_ago = entry_date_time - timedelta(days=60)
+        # one_day_ago = entry_date_time - timedelta(days=360)
+        one_day_ago = entry_date_time - timedelta(days=10)
         observed_values_dict = defaultdict(list)
 
         observations = models.WaterLevelObservation.objects.filter(

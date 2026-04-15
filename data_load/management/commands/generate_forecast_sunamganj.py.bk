@@ -72,13 +72,10 @@ class Command(BaseCommand):
             
             # Identify time column (Time or Date)
             time_col = 'Time' if 'Time' in df.columns else 'Date'
-            
-            # FIX: Convert to datetime and strip timezone info to make it "naive"
-            # This prevents the "Invalid comparison between dtype=datetime64[ns, UTC] and Timestamp" error
-            df[time_col] = pd.to_datetime(df[time_col]).dt.tz_localize(None)
+            df[time_col] = pd.to_datetime(df[time_col])
             
             # --- FILTERING LOGIC ---
-            # Set the threshold to the date of the folder found (this creates a naive Timestamp)
+            # Set the threshold to the date of the folder found
             forecast_start_threshold = pd.to_datetime(final_date_folder, format='%Y%m%d')
             
             # Only keep data from the forecast date onwards (cleans historical rows)
@@ -96,9 +93,9 @@ class Command(BaseCommand):
 
 
             formatted_date = datetime.strptime(final_date_folder, "%Y%m%d").strftime("%Y-%m-%d")
-            
             # 7. Construct JSON Structure
             output_data = {
+
                 "code": "success",
                 "message": "Data has been fetched!",
                 "metadata": {
