@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import paramiko
 import re
+import tempfile
 from datetime import datetime
 from django.core.management.base import BaseCommand
 
@@ -25,6 +26,10 @@ class Command(BaseCommand):
         os.makedirs(base_assets, exist_ok=True)
         local_json_path = os.path.join(base_assets, 'latest_cumilla_forecast.json')
 
+        # Create a unique temporary file path to avoid permission conflicts
+        fd, temp_csv_path = tempfile.mkstemp(suffix='.csv')
+        os.close(fd) 
+
         try:
             # 2. SSH Connection
             ssh = paramiko.SSHClient()
@@ -42,31 +47,41 @@ class Command(BaseCommand):
             if not date_folders:
                 raise Exception(f"No valid date folders (YYYYMMDD) found in {remote_base_dir}")
 
-            # Sort alphabetically (works perfectly for YYYYMMDD) and pick the last one
+            # Sort alphabetically and pick the last one
             latest_date = sorted(date_folders)[-1]
             self.stdout.write(self.style.SUCCESS(f"Latest folder detected: {latest_date}"))
 
             # 4. Define full remote path and download
             remote_file_path = f'{remote_base_dir}{latest_date}/all_en_corr_cumilla.csv'
-            temp_csv = f'/tmp/latest_cumilla_temp.csv'
             
-            sftp.get(remote_file_path, temp_csv)
+            # Download to the unique temp path
+            sftp.get(remote_file_path, temp_csv_path)
             sftp.close()
             ssh.close()
 
             # 5. Data Processing
-            df = pd.read_csv(temp_csv)
+            df = pd.read_csv(temp_csv_path)
             
-            # Use 'Time' column as per your original file structure
-            df['Time'] = pd.to_datetime(df['Time']).dt.strftime('%Y-%m-%d %H:%M:%S')
+            # Ensure 'Time' is datetime and strip any timezone info to prevent comparison errors
+            df['Time'] = pd.to_datetime(df['Time']).dt.tz_localize(None)
+
+            # --- OPTIONAL: Filtering (Keeping only current forecast onwards) ---
+            forecast_start_threshold = pd.to_datetime(latest_date, format='%Y%m%d')
+            df = df[df['Time'] >= forecast_start_threshold].copy()
+            # ------------------------------------------------------------------
+
+            # Format back to string for JSON output
+            df['Time'] = df['Time'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            
             ensemble_cols = [col for col in df.columns if col.startswith('EN#')]
             
-            # Calculate Quantiles as seen in your extracted data
+            # Calculate Quantiles
             p25 = df[ensemble_cols].quantile(0.25, axis=1).round(3).tolist()
             p50 = df[ensemble_cols].quantile(0.50, axis=1).round(3).tolist()
             p75 = df[ensemble_cols].quantile(0.75, axis=1).round(3).tolist()
 
             formatted_date = datetime.strptime(latest_date, "%Y%m%d").strftime("%Y-%m-%d")
+
             # 6. Construct JSON Structure
             output_data = {
                 "code": "success",
@@ -77,9 +92,9 @@ class Command(BaseCommand):
                     "forecast_date": formatted_date,
                     "run_datetime": run_datetime,
                     "dc_unit": "m³/s",
-                    "dl":"290",
+                    "dl": "290",
                     "pb_unit": "%",
-                    "forecast_type":"experimental"
+                    "forecast_type": "experimental"
                 },
                 "data": {
                     "date": df['Time'].tolist(),
@@ -97,3 +112,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             self.stderr.write(self.style.ERROR(f'Error processing Cumilla: {str(e)}'))
+
+        finally:
+            # Clean up the unique temp file
+            if os.path.exists(temp_csv_path):
+                os.remove(temp_csv_path)
