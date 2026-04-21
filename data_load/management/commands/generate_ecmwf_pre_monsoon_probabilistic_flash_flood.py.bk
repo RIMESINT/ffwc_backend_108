@@ -6,19 +6,20 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 import warnings
-import rioxarray
 from datetime import datetime, timedelta
 
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
-# Target Model
+# Target Model as requested
 from data_load.models import Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast
 
-# Suppress technical warnings
+
+# Suppress technical warnings for cleaner logs
 warnings.filterwarnings("ignore", message="Geometry is in a geographic CRS.")
 
+# --- Configuration ---
 STATION_DICT = { 
     1:'khaliajhuri', 2:'gowainghat', 3:'dharmapasha', 4:'userbasin',
     5:'laurergarh', 6:'muslimpur', 7:'debidwar', 8:'ballah',
@@ -41,44 +42,54 @@ STATION_THRESHOLDS = {
 }
 
 class Command(BaseCommand):
-    help = 'Generates 11-day Probabilistic Forecasts with detailed tracing.'
+    help = 'Generates ECMWF Probabilistic Flash Flood Forecasts using the Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast model.'
 
     def add_arguments(self, parser):
         parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYYMMDD)')
-        parser.add_argument('--trace', action='store_true', help='Show detailed tracing')
 
     def handle(self, *args, **kwargs):
         date_input = kwargs.get('date') or datetime.now().strftime('%Y%m%d')
-        trace = kwargs.get('trace')
         date_std = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
 
-        if not self.run_forecast_for_date(date_std, trace):
+        if not self.run_forecast_for_date(date_std):
             yesterday = (datetime.strptime(date_std, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
             self.stdout.write(self.style.WARNING(f"Today's data missing. Trying yesterday: {yesterday}..."))
-            self.run_forecast_for_date(yesterday, trace)
+            self.run_forecast_for_date(yesterday)
 
     def process_ensemble_member(self, station_gdf, forecast_dir, filename, run_date_str):
         filepath = os.path.join(forecast_dir, filename)
         if not os.path.exists(filepath): return None
         run_date_obj = datetime.strptime(run_date_str, '%Y-%m-%d').date()
+
         try:
             with xr.open_dataset(filepath) as ds:
+                # Spatial Dimension Fix
                 da = ds.rename({'lon': 'x', 'lat': 'y'})
                 da.rio.set_spatial_dims(x_dim='x', y_dim='y', inplace=True)
                 da.rio.write_crs("epsg:4326", inplace=True)
                 da = da.sortby(['y', 'x'])
+                
+                # Geometry Guard & Small Basin Extraction
                 clipped = da['tp'].rio.clip(station_gdf.geometry.buffer(0.01), station_gdf.crs, drop=True, all_touched=True)
+                
+                # Unit Conversion (Inspection showed meters/Mg/m2 -> multiply by 1000)
                 weights = np.cos(np.deg2rad(clipped.y))
                 mean_series = clipped.weighted(weights).mean(dim=['x', 'y']).to_series() * 1000
+
+                # Cumulative De-accumulation
                 daily_accumulation = mean_series.resample('1D').max()
                 daily_incremental = daily_accumulation.diff().fillna(daily_accumulation.iloc[0])
                 daily_incremental[daily_incremental < 0] = 0
+
                 daily_rainfall = {}
                 for d, v in daily_incremental.items():
+                    # Day-0 recovery: Attribute end-of-day 00:00 morning slice to the run date
                     key_date = run_date_str if (d.date() > run_date_obj and not daily_rainfall) else d.strftime('%Y-%m-%d')
                     daily_rainfall[key_date] = round(v, 4)
+                
                 return daily_rainfall
         except Exception as e:
+            print(f"      ⚠️ Error processing member {filename}: {e}")
             return None
 
     def get_observed_rainfall(self, station_gdf, given_date):
@@ -102,48 +113,31 @@ class Command(BaseCommand):
                 daily_precip[obs_date.strftime('%Y-%m-%d')] = 0.0
         return pd.DataFrame(list(daily_precip.items()), columns=['Date', 'Rainfall'])
 
-    def calculate_exceedance_probability(self, all_member_rainfall, thresholds, given_date, station_name, trace):
+    def calculate_exceedance_probability(self, all_member_rainfall, thresholds, given_date):
+        if not all_member_rainfall: return {}
         num_members = len(all_member_rainfall)
+        
         combined_df = pd.DataFrame(all_member_rainfall).T.fillna(0)
         combined_df.index = pd.to_datetime(combined_df.index).normalize()
         start_dt = pd.to_datetime(given_date).normalize()
-        
-        # EXTENDED RANGE: Using range(12) to get Current Day + 11 Forecast Days
-        forecast_range = [start_dt + timedelta(days=i) for i in range(12)]
-        full_index = sorted(list(set(combined_df.index).union(set(forecast_range))))
-        combined_df = combined_df.reindex(full_index, fill_value=0)
+        forecast_range = [start_dt + timedelta(days=i) for i in range(10)]
+        combined_df = combined_df.reindex(sorted(list(set(combined_df.index).union(set(forecast_range)))), fill_value=0)
         
         probability_results = {
             "Hours": {str(k): v[0] for k, v in thresholds.items()},
             "Threshold": {str(k): v[1] for k, v in thresholds.items()}
         }
         
-        if trace:
-            self.stdout.write(f"\n{'='*90}\nBASIN: {station_name.upper()}\n{'='*90}")
-
         for p_date in forecast_range:
             daily_probs = {}
-            if trace:
-                self.stdout.write(f"\n DATE: {p_date.strftime('%Y-%m-%d')}")
-
             for idx, values in thresholds.items():
                 hour, threshold = values[0], values[1]
-                days_to_sum = int(hour / 24)
-                sum_range = [(p_date - timedelta(days=i)).normalize() for i in range(days_to_sum)]
-                
-                member_sums = combined_df.loc[sum_range].sum(axis=0)
-                mean_rainfall = member_sums.mean()
-                
-                exceed_count = (member_sums >= threshold).sum()
-                prob = round((exceed_count / num_members) * 100, 2)
-                daily_probs[str(idx)] = prob
-
-                if trace:
-                    self.stdout.write(
-                        f"   {hour}h Window | Thresh: {threshold:6.2f}mm | "
-                        f"Mean Rain: {mean_rainfall:6.2f}mm | Prob: {prob:6.2f}% ({exceed_count}/{num_members})"
-                    )
-
+                sum_range = [(p_date - timedelta(days=i)).normalize() for i in range(int(hour / 24))]
+                try:
+                    member_sums = combined_df.loc[sum_range].sum(axis=0)
+                    exceed_count = (member_sums >= threshold).sum()
+                    daily_probs[str(idx)] = round((exceed_count / num_members) * 100, 2)
+                except: daily_probs[str(idx)] = 0.0
             probability_results[p_date.strftime('%Y-%m-%d')] = daily_probs
         return probability_results
 
@@ -153,39 +147,56 @@ class Command(BaseCommand):
         for date_key, values in results.items():
             if date_key in ["Hours", "Threshold"]: continue
             for idx_str, prob_val in values.items():
+                # Correct Model usage: Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast
                 rows.append(Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast(
-                    prediction_date=prediction_date, basin_id=basin_id,
+                    prediction_date=prediction_date, 
+                    basin_id=basin_id,
                     date=datetime.strptime(date_key, "%Y-%m-%d").date(),
-                    hours=int(h_meta.get(idx_str)), thresholds=float(t_meta.get(idx_str)), 
-                    value=float(prob_val)
+                    hours=h_meta.get(idx_str), 
+                    thresholds=t_meta.get(idx_str), 
+                    value=prob_val
                 ))
         if rows:
-            Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast.objects.filter(prediction_date=prediction_date, basin_id=basin_id).delete()
+            Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast.objects.filter(
+                prediction_date=prediction_date, 
+                basin_id=basin_id
+            ).delete()
             Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast.objects.bulk_create(rows)
 
-    def run_forecast_for_date(self, date_input, trace):
-        self.stdout.write(self.style.SUCCESS(f'--- Starting 11-Day Calculation: {date_input} ---'))
+    def run_forecast_for_date(self, date_input):
+        self.stdout.write(self.style.SUCCESS(f'--- ECMWF ENS Calculation Run: {date_input} ---'))
+        success = False
         date_nodash = date_input.replace('-', '')
         forecast_dir = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_ens_data/{date_nodash}/"
-        if not os.path.exists(forecast_dir): return False
-        
-        member_files = sorted([f for f in os.listdir(forecast_dir) if f.startswith(date_nodash) and f.endswith('.nc')])
-        
+
         for basin_id, station_name in STATION_DICT.items():
             json_path = os.path.join(settings.BASE_DIR, 'assets', 'floodForecastStations', f'{station_name}.json')
             if not os.path.exists(json_path): continue
+            
             station_gdf = gpd.read_file(json_path, crs="epsg:4326")
+            if station_gdf.empty or station_gdf.geometry.iloc[0] is None: continue
+
             all_members_data = []
-            for fname in member_files:
+            # ECMWF 51 Members (EN00-EN50)
+            for i in range(51):
+                fname = f"{date_nodash}_EN{str(i).zfill(2)}.nc"
                 res = self.process_ensemble_member(station_gdf, forecast_dir, fname, date_input)
                 if res: all_members_data.append(res)
-            if not all_members_data: continue
             
+            if not all_members_data: continue
+
             obs_df = self.get_observed_rainfall(station_gdf, date_input)
             obs_dict = dict(zip(obs_df['Date'], obs_df['Rainfall']))
-            combined_rainfall_list = [{**obs_dict, **m} for m in all_members_data]
             
-            response = self.calculate_exceedance_probability(combined_rainfall_list, STATION_THRESHOLDS[basin_id], date_input, station_name, trace)
+            response = self.calculate_exceedance_probability(
+                [{**obs_dict, **m} for m in all_members_data], 
+                STATION_THRESHOLDS[basin_id], 
+                date_input
+            )
+            
             if response:
                 self.save_to_database(response, date_input, basin_id)
-        return True
+                success = True
+                self.stdout.write(f"  ✅ Processed {station_name} ({len(all_members_data)} members)")
+
+        return success

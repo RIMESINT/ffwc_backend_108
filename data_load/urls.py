@@ -173,7 +173,7 @@ urlpatterns = [
     path('monsoon-probabilistic-flash-flood/<slug:givenDate>/<int:basin_id>',views.MonsoonProbabilisticFlashFlood,name='monsoon-probabilistic-flash-flood'),
 
 
-    # Premonsoon URLS
+    # ECMWF Premonsoon URLS
     path('new-basin-wise-flash-flood/<slug:forecast_date>/<int:basin_id>',views.NewFlashFlood,name='new-basin-flash-flood'),
     path('new-probabilistic-flash-flood/<slug:givenDate>/<int:basin_id>',views.NewProbabilisticFlashFlood,name='new-probabilistic-flash-flood'),
 

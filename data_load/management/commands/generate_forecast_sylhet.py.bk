@@ -3,6 +3,7 @@ import json
 import pandas as pd
 import paramiko
 import re
+import tempfile
 from datetime import datetime
 from django.core.management.base import BaseCommand
 
@@ -25,6 +26,10 @@ class Command(BaseCommand):
         base_assets = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast'
         os.makedirs(base_assets, exist_ok=True)
         local_json_path = os.path.join(base_assets, 'latest_sylhet_forecast.json')
+
+        # Create a unique temporary file path to avoid "Permission Denied" errors
+        fd, temp_csv_path = tempfile.mkstemp(suffix='.csv')
+        os.close(fd)
 
         try:
             # 2. SSH Connection
@@ -61,24 +66,26 @@ class Command(BaseCommand):
             if not remote_file_path:
                 raise Exception(f"Searched {len(date_folders)} folders but could not find {target_filename}.")
 
-            # 5. Download the file
-            temp_csv = f'/tmp/latest_sylhet_temp.csv'
-            sftp.get(remote_file_path, temp_csv)
+            # 5. Download the file to the unique temp path
+            sftp.get(remote_file_path, temp_csv_path)
             sftp.close()
             ssh.close()
 
             # 6. Data Processing & Filtering
-            df = pd.read_csv(temp_csv)
+            df = pd.read_csv(temp_csv_path)
             
             # Identify time column (Time or Date)
             time_col = 'Time' if 'Time' in df.columns else 'Date'
-            df[time_col] = pd.to_datetime(df[time_col])
+            
+            # Convert to datetime and strip timezone info to make it "naive" 
+            # (Prevents "Invalid comparison between dtype=datetime64[ns, UTC] and Timestamp")
+            df[time_col] = pd.to_datetime(df[time_col]).dt.tz_localize(None)
             
             # --- FILTERING LOGIC ---
-            # Set the threshold to the date of the folder found (e.g., 20260318 -> 2026-03-18)
+            # Set the threshold to the date of the folder found
             forecast_start_threshold = pd.to_datetime(final_date_folder, format='%Y%m%d')
             
-            # Filter to remove data before the forecast run date (removes 2016-2025 rows)
+            # Filter to remove data before the forecast run date
             df = df[df[time_col] >= forecast_start_threshold].copy()
             # --- END FILTERING LOGIC ---
 
@@ -92,6 +99,7 @@ class Command(BaseCommand):
             p75 = df[ensemble_cols].quantile(0.75, axis=1).round(3).tolist()
 
             formatted_date = datetime.strptime(final_date_folder, "%Y%m%d").strftime("%Y-%m-%d")
+            
             # 7. Construct JSON Structure
             output_data = {
                 "code": "success",
@@ -122,3 +130,8 @@ class Command(BaseCommand):
 
         except Exception as e:
             self.stderr.write(self.style.ERROR(f'Error processing Sylhet: {str(e)}'))
+            
+        finally:
+            # Clean up the unique temp file from /tmp
+            if os.path.exists(temp_csv_path):
+                os.remove(temp_csv_path)

@@ -3237,147 +3237,33 @@ def UkMetPreMonsoonFlashFlood(request, **kwargs):
 
     return Response(response_data)
 
-# @api_view(['GET'])
-# def UkMetPreMonsoonFlashFlood(request, **kwargs):
-#     requested_prediction_date = kwargs['forecast_date']
-#     basin_id = kwargs['basin_id']
-
-#     # 1. Fallback Logic for Prediction Date
-#     try:
-#         target_prediction_dt = datetime.strptime(requested_prediction_date, '%Y-%m-%d').date()
-#     except ValueError:
-#         return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
-
-#     forecast_query = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
-#         prediction_date=target_prediction_dt, 
-#         basin_id=basin_id
-#     ).order_by('date', 'hours')
-    
-#     if not forecast_query.exists():
-#         latest_record = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.latest('prediction_date')
-#         target_prediction_dt = latest_record.prediction_date
-#         forecast_query = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
-#             prediction_date=target_prediction_dt, 
-#             basin_id=basin_id
-#         ).order_by('date', 'hours')
-
-#     # 2. Structure Templates
-#     # Hour to Index Mapping (Ensures consistency)
-#     hour_to_idx = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
-    
-#     response_data = {
-#         "Hours": { "0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240 },
-#         "Threshold": {},
-#     }
-
-#     # Use a dictionary to store date-wise values
-#     # Initialize each date with 0.00 to handle missing thresholds
-#     date_results = defaultdict(lambda: {str(i): 0.0 for i in range(6)})
-#     threshold_map = {}
-
-#     # 3. Populate from DB
-#     for f in forecast_query:
-#         d_str = f.date.strftime("%Y-%m-%d")
-#         if f.hours in hour_to_idx:
-#             idx = hour_to_idx[f.hours]
-#             date_results[d_str][idx] = round(f.value, 2)
-#             threshold_map[idx] = round(f.thresholds, 2)
-
-#     # 4. RUN DATE INJECTION
-#     # If "Today" (the prediction date) is missing from the date list, add it as the first item
-#     run_date_str = target_prediction_dt.strftime("%Y-%m-%d")
-#     if run_date_str not in date_results:
-#         date_results[run_date_str] = {str(i): 0.0 for i in range(6)}
-
-#     # 5. Build Final Sorted Response
-#     response_data["Threshold"] = threshold_map
-    
-#     # Sorting ensures Run Date (e.g., March 25) appears before March 26
-#     for date_key in sorted(date_results.keys()):
-#         response_data[date_key] = date_results[date_key]
-
-#     return Response(response_data)
-    
-# View for Premonsoon deterministic flash flood
-# @api_view(['GET'])
-# def NewFlashFlood(request,**kwargs):
-
-#     forecast_date = kwargs['forecast_date']
-#     basin_id = kwargs['basin_id']
-
-#     latest_record = data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.latest('prediction_date')
-#     latest_date = latest_record.prediction_date  # Access the date field
-
-#     first_query =  data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
-    
-#     if not first_query.exists():
-#         forecast_date = latest_date
-#         second_query =  data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
-#         forecasts = second_query
-#     else:
-#         forecasts = first_query
-
-
-#     # Initialize the response structure
-#     response_data = {
-
-#         "Hours": {
-#             "0": 24,
-#             "1": 48,
-#             "2": 72,
-#             "3": 120,
-#             "4": 168,
-#             "5": 240
-#         },
-
-#         "Threshold": defaultdict(float),
-#     }
-
-#     threshold_list=[]
-
-#     date_value_dict = defaultdict(list)
-#     # Populate the response data with values from the database
-#     for forecast in forecasts:
-#         threshold_list.append(forecast.thresholds)
-#         date_value_dict[forecast.date].append(forecast.value)
- 
-#     # Convert defaultdict to regular dict
-#     threshold_dict={}
-#     for i,threshold in enumerate(sorted(set(threshold_list))):threshold_dict[str(i)]=threshold
-#     response_data["Threshold"] = threshold_dict
-  
-#     for key in date_value_dict.keys():
-#         string_date = key.strftime("%Y-%m-%d")
-#         response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
-
-#     return Response(response_data)
 
 @api_view(['GET'])
 def NewFlashFlood(request, **kwargs):
-    # 1. Capture the date from the URL
     requested_date_str = kwargs['forecast_date'] 
     basin_id = kwargs['basin_id']
 
-    # 2. Query data for the requested date
-    forecasts = data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.filter(
+    # 1. Query the NEW model
+    target_model = data_load_models.Ecmwf_Pre_Monsoon_Basin_Wise_Flash_Flood_Forecast
+    
+    forecasts = target_model.objects.filter(
         prediction_date=requested_date_str, 
         basin_id=basin_id
     ).order_by('date', 'hours')
     
-    # Fallback logic: If URL date is empty, find the latest run
     actual_run_date_str = requested_date_str
     if not forecasts.exists():
         try:
-            latest_record = data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.latest('prediction_date')
+            latest_record = target_model.objects.latest('prediction_date')
             actual_run_date_str = latest_record.prediction_date.strftime("%Y-%m-%d")
-            forecasts = data_load_models.Basin_Wise_Flash_Flood_Forecast.objects.filter(
+            forecasts = target_model.objects.filter(
                 prediction_date=actual_run_date_str, 
                 basin_id=basin_id
             ).order_by('date', 'hours')
-        except data_load_models.Basin_Wise_Flash_Flood_Forecast.DoesNotExist:
+        except target_model.DoesNotExist:
             return Response({"error": "No forecast data found."}, status=404)
 
-    # 3. Define Response Structure (run_date removed)
+    # 2. Response Formatting (Logic remains the same, querying from new model)
     hour_to_idx = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
     
     response_data = {
@@ -3388,7 +3274,6 @@ def NewFlashFlood(request, **kwargs):
     date_value_dict = defaultdict(dict)
     threshold_map = {}
 
-    # 4. Populate Data
     for f in forecasts:
         d_str = f.date.strftime("%Y-%m-%d")
         idx = hour_to_idx.get(f.hours)
@@ -3398,22 +3283,13 @@ def NewFlashFlood(request, **kwargs):
             if idx not in threshold_map:
                 threshold_map[idx] = round(f.thresholds, 2)
 
-    # 5. Day 1 Injection Logic
-    # Ensures the response always starts with the URL date
     if actual_run_date_str not in date_value_dict:
         date_value_dict[actual_run_date_str] = {str(i): 0.0 for i in range(6)}
-    else:
-        # Fill any missing indices for Day 1 with 0.0
-        for i in range(6):
-            if str(i) not in date_value_dict[actual_run_date_str]:
-                date_value_dict[actual_run_date_str][str(i)] = 0.0
-
-    # 6. Final Construction & Chronological Sorting
+    
     response_data["Threshold"] = threshold_map
   
     for key in sorted(date_value_dict.keys()):
         current_date_data = date_value_dict[key]
-        # Ensure every date has all 6 indices (0-5)
         full_indices = {str(i): current_date_data.get(str(i), 0.0) for i in range(6)}
         response_data[key] = full_indices
 
@@ -3424,194 +3300,67 @@ def NewProbabilisticFlashFlood(request, **kwargs):
     forecast_date = kwargs['givenDate']
     basin_id = kwargs['basin_id']
     
-    # 1. Calculate the cutoff date (10 days ago from today)
+    # Use the new model
+    target_model = data_load_models.Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast
+    
     today = timezone.now().date()
     ten_days_ago = today - timedelta(days=10)
 
     try:
-        # Get the latest record date to check if the database has "recent" data at all
-        latest_record = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.latest('prediction_date')
+        latest_record = target_model.objects.latest('prediction_date')
         latest_date = latest_record.prediction_date
-    except data_load_models.Probabilistic_Flash_Flood_Forecast.DoesNotExist:
+    except target_model.DoesNotExist:
         return Response([])
 
-    # 2. Logic to determine which date to query
-    first_query = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+    # Logic to determine target date
+    first_query = target_model.objects.filter(
         prediction_date=forecast_date, 
         basin_id=basin_id
     )
     
     if not first_query.exists():
-        # Fallback to the latest available date
         target_date = latest_date
-        forecasts = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+        forecasts = target_model.objects.filter(
             prediction_date=target_date, 
             basin_id=basin_id
-        )
+        ).order_by('date', 'hours')
     else:
-        target_date = forecast_date # This might be a string from kwargs, handle conversion if needed
-        forecasts = first_query
+        target_date = forecast_date
+        forecasts = first_query.order_by('date', 'hours')
 
-    # 3. Check if the determined target_date is older than 10 days
-    # (Ensure target_date is a date object for comparison)
-    if hasattr(target_date, 'year'): # check if it's already a date object
+    # Date comparison
+    if hasattr(target_date, 'year'):
         check_date = target_date
     else:
-        # If it's a string from kwargs, convert it (assuming YYYY-MM-DD)
         from datetime import datetime
         check_date = datetime.strptime(str(target_date), "%Y-%m-%d").date()
 
     if check_date < ten_days_ago:
         return Response([])
 
-    # --- Proceed with response construction if date is recent ---
-
+    # Response construction
     response_data = {
         "Hours": {"0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240},
         "Thresholds": {},
     }
 
-    threshold_list = []
-    date_value_dict = defaultdict(list)
+    # Group by date and maintain hour order
+    # Mapping table hours to indices
+    hours_map = {24: 0, 48: 1, 72: 2, 120: 3, 168: 4, 240: 5}
+    date_value_dict = defaultdict(lambda: [0.0] * 6)
+    threshold_list = [0.0] * 6
 
     for forecast in forecasts:
-        threshold_list.append(forecast.thresholds)
-        date_value_dict[forecast.date].append(forecast.value)
+        idx = hours_map.get(forecast.hours)
+        if idx is not None:
+            date_value_dict[forecast.date][idx] = round(forecast.value, 2)
+            # Thresholds are usually the same for all dates, populate once
+            threshold_list[idx] = round(forecast.thresholds, 2)
  
-    # Format Thresholds
-    threshold_dict = {str(i): val for i, val in enumerate(sorted(set(threshold_list)))}
-    response_data["Thresholds"] = threshold_dict
+    response_data["Thresholds"] = {str(i): val for i, val in enumerate(threshold_list)}
   
-    # Format daily values
-    # Note: excluding the last key as per your original logic [:-1]
     sorted_keys = sorted(date_value_dict.keys())
-    for key in sorted_keys[:-1]:
-        string_date = key.strftime("%Y-%m-%d")
-        response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
-
-    return Response(response_data)
-
-# View for Premonsoon Probabilistic flash flood
-# @api_view(['GET'])
-# def NewProbabilisticFlashFlood(request,**kwargs):
-
-#     forecast_date = kwargs['givenDate']
-#     basin_id = kwargs['basin_id']
-
-#     latest_record = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.latest('prediction_date')
-#     latest_date = latest_record.prediction_date  # Access the date field
-
-#     first_query =  data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
-    
-#     if not first_query.exists():
-#         forecast_date = latest_date
-#         second_query =  data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
-#         forecasts = second_query
-#     else:
-#         forecasts = first_query
-
-
-#     # Initialize the response structure
-#     response_data = {
-
-#         "Hours": {
-#             "0": 24,
-#             "1": 48,
-#             "2": 72,
-#             "3": 120,
-#             "4": 168,
-#             "5": 240
-#         },
-
-#         "Thresholds": defaultdict(float),
-#     }
-
-#     threshold_list=[]
-
-#     date_value_dict = defaultdict(list)
-#     # Populate the response data with values from the database
-#     for forecast in forecasts:
-#         threshold_list.append(forecast.thresholds)
-#         date_value_dict[forecast.date].append(forecast.value)
- 
-#     # Convert defaultdict to regular dict
-#     threshold_dict={}
-#     for i,threshold in enumerate(sorted(set(threshold_list))):threshold_dict[str(i)]=threshold
-#     response_data["Thresholds"] = threshold_dict
-  
-#     for key in list(date_value_dict.keys())[:-1]:
-#         string_date = key.strftime("%Y-%m-%d")
-#         response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
-
-#     return Response(response_data)
-
-@api_view(['GET'])
-def MonsoonProbabilisticFlashFlood(request, **kwargs):
-    given_date_str = kwargs['givenDate']
-    basin_id = kwargs['basin_id']
-
-    # 1. Define the 10-day window
-    today = timezone.now().date()
-    ten_days_ago = today - timedelta(days=10)
-
-    # 2. Identify the latest date available in the DB
-    try:
-        latest_record = models.MonsoonProbabilisticFlashFloodForecast.objects.latest('prediction_date')
-        latest_date = latest_record.prediction_date
-    except models.MonsoonProbabilisticFlashFloodForecast.DoesNotExist:
-        return Response([])
-
-    # 3. Determine which date to query and validate its age
-    first_query = models.MonsoonProbabilisticFlashFloodForecast.objects.filter(
-        prediction_date=given_date_str, 
-        basin_id=basin_id
-    )
-
-    if not first_query.exists():
-        # Fallback to latest date
-        target_date = latest_date
-        forecasts = models.MonsoonProbabilisticFlashFloodForecast.objects.filter(
-            prediction_date=target_date, 
-            basin_id=basin_id
-        )
-    else:
-        # Use the date provided in the URL (convert string to date object for comparison)
-        try:
-            target_date = datetime.strptime(given_date_str, "%Y-%m-%d").date()
-        except ValueError:
-            # Handle cases where the URL slug might not be a valid date format
-            target_date = latest_date 
-        
-        forecasts = first_query
-
-    # 4. Critical Check: Is the date we are about to return older than 10 days?
-    if target_date < ten_days_ago:
-        return Response([])
-
-    # --- Standard Response Construction ---
-
-    response_data = {
-        "Hours": {
-            "0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240
-        },
-        "Thresholds": {},
-    }
-
-    threshold_list = []
-    date_value_dict = defaultdict(list)
-
-    for forecast in forecasts:
-        threshold_list.append(round(forecast.thresholds, 2))
-        date_value_dict[forecast.date].append(round(forecast.value, 2))
- 
-    # Build Thresholds dictionary
-    threshold_dict = {
-        str(i): threshold for i, threshold in enumerate(sorted(set(threshold_list)))
-    }
-    response_data["Thresholds"] = threshold_dict
-  
-    # Format the daily records (excluding the last one as per your original logic)
-    sorted_keys = sorted(date_value_dict.keys())
+    # Note: excluding last key as per your logic [:-1]
     for key in sorted_keys[:-1]:
         string_date = key.strftime("%Y-%m-%d")
         response_data[string_date] = {
@@ -3620,58 +3369,233 @@ def MonsoonProbabilisticFlashFlood(request, **kwargs):
 
     return Response(response_data)
 
-# @api_view(['GET'])
-# def MonsoonProbabilisticFlashFlood(request,**kwargs):
 
+# @api_view(['GET'])
+# def NewProbabilisticFlashFlood(request, **kwargs):
 #     forecast_date = kwargs['givenDate']
 #     basin_id = kwargs['basin_id']
+    
+#     # 1. Calculate the cutoff date (10 days ago from today)
+#     today = timezone.now().date()
+#     ten_days_ago = today - timedelta(days=10)
 
-#     latest_record = models.MonsoonProbabilisticFlashFloodForecast.objects.latest('prediction_date')
-#     latest_date = latest_record.prediction_date  # Access the date field
+#     try:
+#         # Get the latest record date to check if the database has "recent" data at all
+#         latest_record = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.latest('prediction_date')
+#         latest_date = latest_record.prediction_date
+#     except data_load_models.Probabilistic_Flash_Flood_Forecast.DoesNotExist:
+#         return Response([])
 
-#     first_query =  models.MonsoonProbabilisticFlashFloodForecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+#     # 2. Logic to determine which date to query
+#     first_query = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#         prediction_date=forecast_date, 
+#         basin_id=basin_id
+#     )
     
 #     if not first_query.exists():
-#         forecast_date = latest_date
-#         second_query =  models.MonsoonProbabilisticFlashFloodForecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
-#         forecasts = second_query
+#         # Fallback to the latest available date
+#         target_date = latest_date
+#         forecasts = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#             prediction_date=target_date, 
+#             basin_id=basin_id
+#         )
 #     else:
+#         target_date = forecast_date # This might be a string from kwargs, handle conversion if needed
 #         forecasts = first_query
 
+#     # 3. Check if the determined target_date is older than 10 days
+#     # (Ensure target_date is a date object for comparison)
+#     if hasattr(target_date, 'year'): # check if it's already a date object
+#         check_date = target_date
+#     else:
+#         # If it's a string from kwargs, convert it (assuming YYYY-MM-DD)
+#         from datetime import datetime
+#         check_date = datetime.strptime(str(target_date), "%Y-%m-%d").date()
 
-#     # Initialize the response structure
+#     if check_date < ten_days_ago:
+#         return Response([])
+
+#     # --- Proceed with response construction if date is recent ---
+
 #     response_data = {
-
-#         "Hours": {
-#             "0": 24,
-#             "1": 48,
-#             "2": 72,
-#             "3": 120,
-#             "4": 168,
-#             "5": 240
-#         },
-
-#         "Thresholds": defaultdict(float),
+#         "Hours": {"0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240},
+#         "Thresholds": {},
 #     }
 
-#     threshold_list=[]
-
+#     threshold_list = []
 #     date_value_dict = defaultdict(list)
-#     # Populate the response data with values from the database
+
 #     for forecast in forecasts:
-#         threshold_list.append(round(forecast.thresholds,2))
-#         date_value_dict[forecast.date].append(round(forecast.value,2))
+#         threshold_list.append(forecast.thresholds)
+#         date_value_dict[forecast.date].append(forecast.value)
  
-#     # Convert defaultdict to regular dict
-#     threshold_dict={}
-#     for i,threshold in enumerate(sorted(set(threshold_list))):threshold_dict[str(i)]=threshold
+#     # Format Thresholds
+#     threshold_dict = {str(i): val for i, val in enumerate(sorted(set(threshold_list)))}
 #     response_data["Thresholds"] = threshold_dict
   
-#     for key in list(date_value_dict.keys())[:-1]:
+#     # Format daily values
+#     # Note: excluding the last key as per your original logic [:-1]
+#     sorted_keys = sorted(date_value_dict.keys())
+#     for key in sorted_keys[:-1]:
 #         string_date = key.strftime("%Y-%m-%d")
 #         response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
 
 #     return Response(response_data)
+
+# @api_view(['GET'])
+# def MonsoonProbabilisticFlashFlood(request, **kwargs):
+#     given_date_str = kwargs.get('givenDate')
+#     basin_id = kwargs.get('basin_id')
+
+#     # 1. Define the 10-day window
+#     today = timezone.now().date()
+#     ten_days_ago = today - timedelta(days=10)
+
+#     # 2. Query the Correct Model
+#     # Filter by basin and the date provided in the URL
+#     forecasts = models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#         basin_id=basin_id,
+#         prediction_date=given_date_str
+#     ).order_by('date', 'hours')
+
+#     target_date = None
+
+#     if forecasts.exists():
+#         # Convert string to date object for age comparison
+#         try:
+#             target_date = datetime.strptime(given_date_str, "%Y-%m-%d").date()
+#         except ValueError:
+#             return Response({"error": "Invalid date format"}, status=400)
+#     else:
+#         # 3. Fallback: Find the latest available date specifically for this basin
+#         try:
+#             latest_record = models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#                 basin_id=basin_id
+#             ).latest('prediction_date')
+            
+#             target_date = latest_record.prediction_date
+            
+#             # Re-fetch all records for that specific latest date
+#             forecasts = models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#                 prediction_date=target_date, 
+#                 basin_id=basin_id
+#             ).order_by('date', 'hours')
+#         except models.Probabilistic_Flash_Flood_Forecast.DoesNotExist:
+#             return Response({"error": f"No records found for basin {basin_id}"}, status=404)
+
+#     # 4. Age Validation
+#     if target_date < ten_days_ago:
+#         return Response({
+#             "message": "Data is older than 10 days",
+#             "found_prediction_date": str(target_date),
+#             "cutoff_date": str(ten_days_ago)
+#         })
+
+#     # 5. Build the Response
+#     response_data = {
+#         "Hours": {"0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240},
+#         "Thresholds": {},
+#     }
+
+#     # Helper mapping to ensure hours align with the correct JSON index
+#     hours_map = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    
+#     threshold_set = set()
+#     date_groups = defaultdict(dict)
+
+#     for f in forecasts:
+#         # Add to unique thresholds
+#         threshold_set.add(round(f.thresholds, 2))
+        
+#         # Format the forecast target date
+#         d_str = f.date.strftime("%Y-%m-%d")
+        
+#         # Map value to index based on 'hours' field
+#         hour_idx = hours_map.get(f.hours)
+#         if hour_idx is not None:
+#             date_groups[d_str][hour_idx] = round(f.value, 2)
+
+#     # Format Thresholds: sorted numerically
+#     sorted_thresholds = sorted(list(threshold_set))
+#     response_data["Thresholds"] = {
+#         str(i): val for i, val in enumerate(sorted_thresholds)
+#     }
+
+#     # Add the date-wise data (e.g., "2026-04-20", "2026-04-21")
+#     for d_str in sorted(date_groups.keys()):
+#         response_data[d_str] = date_groups[d_str]
+
+#     return Response(response_data)
+
+@api_view(['GET'])
+def MonsoonProbabilisticFlashFlood(request, **kwargs):
+    given_date_str = kwargs.get('givenDate')
+    basin_id = kwargs.get('basin_id')
+    
+    # Pointing to the specific ECMWF model
+    target_model = models.ECMWF_Monsoon_Probabilistic_Flash_Flood_Forecast
+
+    today = timezone.now().date()
+    ten_days_ago = today - timedelta(days=10)
+
+    # 1. Fetch data for specific date
+    forecasts = target_model.objects.filter(
+        basin_id=basin_id,
+        prediction_date=given_date_str
+    ).order_by('date', 'hours')
+
+    target_date = None
+
+    if forecasts.exists():
+        try:
+            target_date = datetime.strptime(given_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({"error": "Invalid date format"}, status=400)
+    else:
+        # 2. Fallback to latest available data for this basin
+        try:
+            latest_record = target_model.objects.filter(
+                basin_id=basin_id
+            ).latest('prediction_date')
+            
+            target_date = latest_record.prediction_date
+            forecasts = target_model.objects.filter(
+                prediction_date=target_date, 
+                basin_id=basin_id
+            ).order_by('date', 'hours')
+        except target_model.DoesNotExist:
+            return Response({"error": f"No records found for basin {basin_id}"}, status=404)
+
+    # 3. Expiry Check
+    if target_date < ten_days_ago:
+        return Response({"message": "Data is older than 10 days"}, status=200)
+
+    # 4. JSON Construction
+    response_data = {
+        "Hours": {"0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240},
+        "Thresholds": {},
+    }
+
+    hours_map = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    threshold_set = set()
+    date_groups = defaultdict(dict)
+
+    for f in forecasts:
+        threshold_set.add(round(f.thresholds, 2))
+        d_str = f.date.strftime("%Y-%m-%d")
+        hour_idx = hours_map.get(f.hours)
+        if hour_idx is not None:
+            date_groups[d_str][hour_idx] = round(f.value, 2)
+
+    # Sort thresholds and map to indices
+    sorted_thresholds = sorted(list(threshold_set))
+    response_data["Thresholds"] = {str(i): val for i, val in enumerate(sorted_thresholds)}
+
+    # Map daily results
+    for d_str in sorted(date_groups.keys()):
+        response_data[d_str] = date_groups[d_str]
+
+    return Response(response_data)
 
 @api_view(['GET'])
 def UKMetMonsoonProbabilisticFlashFlood(request,**kwargs):

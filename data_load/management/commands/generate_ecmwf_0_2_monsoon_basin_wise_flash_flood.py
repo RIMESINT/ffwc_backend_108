@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from data_load.models import MonsoonBasinWiseFlashFloodForecast
+from data_load.models import Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast
+
 
 # Suppress CRS buffer warnings for cleaner output
 warnings.filterwarnings("ignore", message="Geometry is in a geographic CRS.")
@@ -174,7 +175,7 @@ class Command(BaseCommand):
                 # Rolling cumulative sum across the hourly window
                 cum_sum = sum(dict_rainfall.get((current_dt - timedelta(days=d)).strftime('%Y-%m-%d'), 0.0) for d in range(int(hr/24)))
                 
-                rows.append(MonsoonBasinWiseFlashFloodForecast(
+                rows.append(Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast(
                     prediction_date=prediction_date,
                     basin_id=basin_id,
                     date=current_dt.date(),
@@ -184,8 +185,8 @@ class Command(BaseCommand):
                 ))
         
         if rows:
-            MonsoonBasinWiseFlashFloodForecast.objects.filter(
+            Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.filter(
                 prediction_date=prediction_date, basin_id=basin_id
             ).delete()
-            MonsoonBasinWiseFlashFloodForecast.objects.bulk_create(rows)
+            Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.bulk_create(rows)
             self.stdout.write(f"  ✅ Saved Basin {basin_id}")
