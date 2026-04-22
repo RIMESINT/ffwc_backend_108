@@ -10,7 +10,8 @@ from datetime import datetime, timedelta
 
 from django.core.management.base import BaseCommand
 from django.conf import settings
-from data_load.models import Basin_Wise_Flash_Flood_Forecast
+from data_load.models import Ecmwf_Pre_Monsoon_Basin_Wise_Flash_Flood_Forecast
+
 
 
 # Suppress the buffer warning
@@ -153,7 +154,7 @@ class Command(BaseCommand):
                 cum_sum = sum(dict_rainfall.get((current_dt - timedelta(days=d)).strftime('%Y-%m-%d'), 0.0) for d in range(days_to_sum))
                 threshold = STATION_THRESHOLDS[basin_id][hr]
                 
-                rows.append(Basin_Wise_Flash_Flood_Forecast(
+                rows.append(Ecmwf_Pre_Monsoon_Basin_Wise_Flash_Flood_Forecast(
                     prediction_date=prediction_date, basin_id=basin_id,
                     date=current_dt.date(), hours=hr, thresholds=threshold, value=round(cum_sum, 2)
                 ))
@@ -162,8 +163,8 @@ class Command(BaseCommand):
                     basin_risks.append({'basin': station_name.upper(), 'date': current_dt.strftime('%Y-%m-%d'), 'hour': hr, 'val': round(cum_sum, 2), 'thresh': threshold})
         
         if rows:
-            Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=prediction_date, basin_id=basin_id).delete()
-            Basin_Wise_Flash_Flood_Forecast.objects.bulk_create(rows)
+            Ecmwf_Pre_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=prediction_date, basin_id=basin_id).delete()
+            Ecmwf_Pre_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.bulk_create(rows)
             self.stdout.write(f"  ✅ Processed {station_name}")
         return basin_risks
 

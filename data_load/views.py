@@ -2948,12 +2948,17 @@ def BMDWRFMonsoonFlashFlood(request, **kwargs):
 
 @api_view(['GET'])
 def BMDWRFPreMonsoonFlashFlood(request, **kwargs):
-    """
-    Retrieves BMD WRF Pre-Monsoon flash flood forecast data.
-    Ensures Day 1 is injected and indices are padded.
-    """
+
     requested_forecast_date_str = kwargs.get('forecast_date')
     requested_basin_id = kwargs.get('basin_id')
+
+    restricted_basins = [10, 11]
+
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
     
     # 1. Date Parsing
     try:
@@ -3166,6 +3171,14 @@ def UkMetPreMonsoonFlashFlood(request, **kwargs):
     requested_date_str = kwargs['forecast_date'] 
     basin_id = kwargs['basin_id']
 
+    restricted_basins = [10, 11]
+
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
+
     try:
         target_prediction_dt = datetime.strptime(requested_date_str, '%Y-%m-%d').date()
     except ValueError:
@@ -3243,6 +3256,14 @@ def NewFlashFlood(request, **kwargs):
     requested_date_str = kwargs['forecast_date'] 
     basin_id = kwargs['basin_id']
 
+    restricted_basins = [10, 11]
+
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
+
     # 1. Query the NEW model
     target_model = data_load_models.Ecmwf_Pre_Monsoon_Basin_Wise_Flash_Flood_Forecast
     
@@ -3300,6 +3321,14 @@ def NewProbabilisticFlashFlood(request, **kwargs):
     forecast_date = kwargs['givenDate']
     basin_id = kwargs['basin_id']
     
+    restricted_basins = [10, 11]
+
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
+
     # Use the new model
     target_model = data_load_models.Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast
     
@@ -3655,6 +3684,14 @@ def UKMetPreMonsoonProbabilisticFlashFlood(request, **kwargs):
     # 1. Capture the requested date from the URL (givenDate)
     requested_date_str = kwargs['givenDate'] 
     basin_id = kwargs['basin_id']
+
+    restricted_basins = [10, 11]
+
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
 
     try:
         target_prediction_dt = datetime.strptime(requested_date_str, '%Y-%m-%d').date()

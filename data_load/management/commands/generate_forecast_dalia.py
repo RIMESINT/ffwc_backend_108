@@ -26,6 +26,7 @@ class Command(BaseCommand):
         REMOTE_PASS = 'mmb!@#$'
 
         remote_base_dir = '/home/mmb/tank-teesta-new-auto/corrected_output/csv/'
+        # Note: Ensure this spelling matches the server (DALIA vs dalia)
         target_filename = 'all_en_corr_DALIA.csv'
         
         base_assets = os.path.join(settings.BASE_DIR, 'assets', 'flood-monitor-basin-forecast')
@@ -42,19 +43,12 @@ class Command(BaseCommand):
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             
-            self.stdout.write(f"--> Connecting to {REMOTE_HOST} (User: {REMOTE_USER})...")
-            ssh.connect(
-                REMOTE_HOST, 
-                username=REMOTE_USER, 
-                password=REMOTE_PASS, 
-                timeout=30, 
-                banner_timeout=30 
-            )
+            self.stdout.write(f"--> Connecting to {REMOTE_HOST}...")
+            ssh.connect(REMOTE_HOST, username=REMOTE_USER, password=REMOTE_PASS, timeout=30)
             self.stdout.write(self.style.SUCCESS("--> SSH Connection established."))
             sftp = ssh.open_sftp()
 
             # 3. Scan for date folders
-            self.stdout.write(f"--> Scanning remote directory: {remote_base_dir}")
             all_entries = sftp.listdir(remote_base_dir)
             date_folders = sorted([f for f in all_entries if re.match(r'^\d{8}$', f)], reverse=True)
 
@@ -65,7 +59,6 @@ class Command(BaseCommand):
             final_date_folder = None
 
             # 4. Locate the most recent valid file
-            self.stdout.write("--> Searching for the most recent valid data folder...")
             for folder in date_folders:
                 candidate_path = f"{remote_base_dir}{folder}/{target_filename}"
                 try:
@@ -81,12 +74,9 @@ class Command(BaseCommand):
                 raise Exception(f"Could not find {target_filename} in recent folders.")
 
             # 5. Download Main Forecast
-            self.stdout.write(f"--> Downloading main forecast: {target_filename}")
             sftp.get(remote_file_path, temp_csv)
-            self.stdout.write("--> Main forecast download complete.")
 
             # 6. Data Processing
-            self.stdout.write("--> Processing forecast data (calculating percentiles)...")
             df = pd.read_csv(temp_csv)
             time_col = 'Time' if 'Time' in df.columns else 'Date'
             df[time_col] = pd.to_datetime(df[time_col]).dt.tz_localize(None)
@@ -101,33 +91,43 @@ class Command(BaseCommand):
 
             formatted_date = datetime.strptime(final_date_folder, "%Y%m%d").strftime("%Y-%m-%d")
             dates_list = df[time_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
-            self.stdout.write(f"--> Processed {len(dates_list)} forecast time steps.")
 
-            # 7. Probability Computation (data_pb)
+            # 7. Probability Computation (Updated Naming & Logic)
             pb_dates = []
             pb_values = []
-            remote_pb_file = f"{remote_base_dir}{final_date_folder}/exceedence{final_date_folder}.csv"
+            
+            # Updated generic naming convention: exceedence_YYYYMMDD_dalia.csv
+            remote_pb_filename = f"exceedence_{final_date_folder}_dalia.csv"
+            remote_pb_file = f"{remote_base_dir}{final_date_folder}/{remote_pb_filename}"
 
-            self.stdout.write(f"--> Checking for exceedence file: exceedence{final_date_folder}.csv")
+            self.stdout.write(f"--> Checking for exceedence file: {remote_pb_filename}")
             try:
+                sftp.stat(remote_pb_file)
                 sftp.get(remote_pb_file, temp_pb_csv)
-                self.stdout.write("--> Exceedence file downloaded. Parsing...")
                 df_pb = pd.read_csv(temp_pb_csv)
                 
                 if 'ex_pr' in df_pb.columns:
                     pb_values = df_pb['ex_pr'].tolist()
-                    pb_dates = dates_list[:len(pb_values)]
-                    self.stdout.write(self.style.SUCCESS(f"--> Probability data loaded ({len(pb_values)} entries)."))
+                    
+                    # Pull dates from PB file if available
+                    if 'date' in df_pb.columns:
+                        pb_dates = pd.to_datetime(df_pb['date']).dt.strftime('%Y-%m-%d').tolist()
+                    else:
+                        # Fallback: align with main dates list (YYYY-MM-DD)
+                        pb_dates = [d.split(' ')[0] for d in dates_list[:len(pb_values)]]
+                    
+                    self.stdout.write(self.style.SUCCESS(f"--> Probability data loaded."))
                 else:
-                    self.stdout.write(self.style.WARNING("--> Column 'ex_pr' missing in exceedence file. Skipping pb data."))
+                    self.stdout.write(self.style.WARNING("--> Column 'ex_pr' missing in PB file."))
+            except IOError:
+                self.stdout.write(self.style.WARNING(f"--> File {remote_pb_filename} not found."))
             except Exception as pb_err:
-                self.stdout.write(self.style.WARNING(f"--> Exceedence file not found or error: {pb_err}"))
+                self.stdout.write(self.style.WARNING(f"--> PB Error: {pb_err}"))
 
             sftp.close()
             ssh.close()
 
             # 8. Final JSON Output
-            self.stdout.write(f"--> Saving final JSON to: {local_json_path}")
             output_data = {
                 "code": "success",
                 "message": "Data has been fetched!",
@@ -156,14 +156,12 @@ class Command(BaseCommand):
             with open(local_json_path, 'w') as f:
                 json.dump(output_data, f, indent=2)
 
-            self.stdout.write(self.style.SUCCESS(f"DONE: Dalia forecast successfully updated for {formatted_date}."))
+            self.stdout.write(self.style.SUCCESS(f"DONE: Dalia updated for {formatted_date}."))
 
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"FATAL ERROR: {str(e)}"))
         
         finally:
-            self.stdout.write("--> Cleaning up temporary files...")
             for f_path in [temp_csv, temp_pb_csv]:
                 if os.path.exists(f_path):
                     os.remove(f_path)
-            self.stdout.write("--> Cleanup complete.")
