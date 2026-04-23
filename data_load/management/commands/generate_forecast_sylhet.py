@@ -112,7 +112,7 @@ class Command(BaseCommand):
             # 7. Probability Computation (data_pb)
             pb_dates = []
             pb_values = []
-            remote_pb_file = f"{remote_base_dir}{final_date_folder}/exceedence{final_date_folder}.csv"
+            remote_pb_file = f"{remote_base_dir}{final_date_folder}/exceedence_{final_date_folder}_sylhet.csv"
 
             self.stdout.write(f"--> Checking for exceedence file: exceedence{final_date_folder}.csv")
             try:

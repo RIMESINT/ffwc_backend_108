@@ -2954,13 +2954,12 @@ def BMDWRFPreMonsoonFlashFlood(request, **kwargs):
 
     restricted_basins = [10, 11]
 
-    if basin_id in restricted_basins:
+    if requested_basin_id in restricted_basins:
         return Response(
             {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
             status=403
         )
     
-    # 1. Date Parsing
     try:
         target_prediction_dt = datetime.strptime(requested_forecast_date_str, '%Y-%m-%d').date()
     except ValueError:

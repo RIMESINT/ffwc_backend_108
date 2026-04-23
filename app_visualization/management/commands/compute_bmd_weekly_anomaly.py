@@ -49,7 +49,7 @@ class Command(BaseCommand):
         
         # Verify t7 exists in the NC file before proceeding
         if t7 not in ds_wrf.time.values:
-            self.stdout.write(self.style.ERROR(f"❌ Forecast in {WRF_NC_FILE} does not reach 7 days."))
+            self.stdout.write(self.style.ERROR(f" Forecast in {WRF_NC_FILE} does not reach 7 days."))
             return
 
         wrf_weekly_mean = (wrf_acc.sel(time=t7) - wrf_acc.sel(time=t0)) / 7
