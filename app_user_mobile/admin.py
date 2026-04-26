@@ -17,9 +17,12 @@ from .models import WaterLevelSync
 from .forms import HydroSyncForm,HourlySyncForm
 from io import StringIO
 
+from data_load.models import FfwcLastUpdateDate
+
 from django.conf import settings
 import requests
 # Adding - by Sajib 
+from django.utils import timezone
 
 try:
     admin.site.unregister(WaterLevelSync)
@@ -53,11 +56,27 @@ class WaterLevelSyncAdmin(admin.ModelAdmin):
                 def stream_hourly():
                     yield f"DATA:START:{len(stations)}\n"
                     for index, station in enumerate(stations, 1):
-                        out = StringIO()
-                        call_command('sync_hydro_hourly', f'--{mode}', station_code=station.station_code, hours=hours, stdout=out)
-                        yield f"DATA:MSG:{out.getvalue()}\n"
-                        yield f"DATA:PROGRESS:{index}\n"
+                        try:
+                            out = StringIO()
+                            call_command('sync_hydro_hourly', f'--{mode}', station_code=station.station_code, hours=hours, stdout=out)
+                            yield f"DATA:MSG:{out.getvalue()}\n"
+                            yield f"DATA:PROGRESS:{index}\n"
+                        except Exception as e:
+                            yield f"DATA:MSG:Error syncing station {station.station_code}: {str(e)}\n"
+
+                    # --- NEW LOGIC START ---
+                    try:
+                        # Update the singleton record to today's date
+                        FfwcLastUpdateDate.objects.create(
+                            last_update_date=timezone.now().date()
+                        )
+                        yield f"DATA:MSG:>>> System update date successfully set to {timezone.now().date()}.\n"
+                    except Exception as e:
+                        yield f"DATA:MSG:>>> Warning: Last Update Date table could not be updated: {str(e)}\n"
+                    # --- NEW LOGIC END ---
+
                     yield f"DATA:COMPLETE:Hourly Sync Finished.\n"
+                
                 return StreamingHttpResponse(stream_hourly(), content_type='text/plain')
         else:
             form = HourlySyncForm()
@@ -102,6 +121,19 @@ class WaterLevelSyncAdmin(admin.ModelAdmin):
                                 yield f"DATA:PROGRESS:{index}\n"
                             except Exception as e:
                                 yield f"DATA:MSG:Error at {station.name}: {str(e)}\n"
+
+
+                                # --- NEW LOGIC START ---
+                        try:
+                            # Update the FfwcLastUpdateDate table
+                            # Note: Your model's save() method automatically deletes the old record
+                            FfwcLastUpdateDate.objects.create(
+                                last_update_date=to_date # Usually we set this to the 'to_date' used in sync
+                            )
+                            yield f"DATA:MSG:>>> Updated system last update date to {to_date}.\n"
+                        except Exception as e:
+                            yield f"DATA:MSG:>>> Warning: Failed to update last update date table: {str(e)}\n"
+                        # --- NEW LOGIC END ---
                             
                         yield f"DATA:COMPLETE:Successfully processed {total} stations.\n"
 
@@ -130,60 +162,56 @@ class RainfallSyncAdmin(admin.ModelAdmin):
     change_list_template = "admin/rainfall_sync_list.html"
 
     def get_urls(self):
-            urls = super().get_urls()
-            return [
-                path('execute-rainfall-sync/', self.admin_site.admin_view(self.sync_view), name='execute-rainfall-sync'),
-                path('execute-rainfall-hourly-sync/', self.admin_site.admin_view(self.hourly_sync_view), name='execute-rainfall-hourly-sync'),
-            ] + urls
+        urls = super().get_urls()
+        return [
+            path('execute-rainfall-sync/', self.admin_site.admin_view(self.sync_view), name='execute-rainfall-sync'),
+            path('execute-rainfall-hourly-sync/', self.admin_site.admin_view(self.hourly_sync_view), name='execute-rainfall-hourly-sync'),
+        ] + urls
 
     def hourly_sync_view(self, request):
-            if request.method == 'POST':
-                # Use the Rainfall specific hourly form here
-                form = RainfallHourlySyncForm(request.POST) 
-                if form.is_valid():
-                    selected_station = form.cleaned_data['station']
-                    hours = form.cleaned_data['hours']
-                    mode = form.cleaned_data['mode']
+        if request.method == 'POST':
+            form = RainfallHourlySyncForm(request.POST) 
+            if form.is_valid():
+                selected_station = form.cleaned_data['station']
+                hours = form.cleaned_data['hours']
+                mode = form.cleaned_data['mode']
+                stations = RainfallStation.objects.filter(status=True) if not selected_station else [selected_station]
 
-                    # Ensure we are filtering RainfallStation
-                    stations = RainfallStation.objects.filter(status=True) if not selected_station else [selected_station]
-
-                    def stream_rainfall_hourly():
-                        yield f"DATA:START:{len(stations)}\n"
-                        for index, station in enumerate(stations, 1):
+                def stream_rainfall_hourly():
+                    yield f"DATA:START:{len(stations)}\n"
+                    for index, station in enumerate(stations, 1):
+                        try:
                             out = StringIO()
-                            # Ensure this calls the rainfall hourly command
-                            call_command(
-                                'sync_rainfall_hourly', 
-                                f'--{mode}', 
-                                station_code=station.station_code, 
-                                hours=hours, 
-                                stdout=out
-                            )
+                            call_command('sync_rainfall_hourly', f'--{mode}', station_code=station.station_code, hours=hours, stdout=out)
                             yield f"DATA:MSG:{out.getvalue()}\n"
                             yield f"DATA:PROGRESS:{index}\n"
-                        yield f"DATA:COMPLETE:Rainfall Hourly Sync Finished.\n"
-                    
-                    return StreamingHttpResponse(stream_rainfall_hourly(), content_type='text/plain')
-            else:
-                # Use the Rainfall specific hourly form here
-                form = RainfallHourlySyncForm()
+                        except Exception as e:
+                            yield f"DATA:MSG:Error at {station.name}: {str(e)}\n"
 
-            context = {
-                **self.admin_site.each_context(request), 
-                'form': form, 
-                'opts': self.model._meta, 
-                'title': 'Rainfall Hourly Sync'
-            }
-            return render(request, "admin/sync_hydro_form.html", context)
+                    # --- UPDATE LAST UPDATE DATE TABLE ---
+                    try:
+                        today = timezone.now().date()
+                        FfwcLastUpdateDate.objects.create(last_update_date=today)
+                        yield f"DATA:MSG:>>> System update date successfully set to {today}.\n"
+                    except Exception as e:
+                        yield f"DATA:MSG:>>> Warning: Could not update table: {str(e)}\n"
+
+                    yield f"DATA:COMPLETE:Rainfall Hourly Sync Finished.\n"
+                
+                return StreamingHttpResponse(stream_rainfall_hourly(), content_type='text/plain')
+        else:
+            form = RainfallHourlySyncForm()
+
+        context = {**self.admin_site.each_context(request), 'form': form, 'opts': self.model._meta, 'title': 'Rainfall Hourly Sync'}
+        return render(request, "admin/sync_hydro_form.html", context)
 
     def sync_view(self, request):
         if request.method == 'POST':
             form = RainfallSyncForm(request.POST)
             if form.is_valid():
                 selected_station = form.cleaned_data['station']
-                from_date = form.cleaned_data['from_date'].strftime('%Y-%m-%d')
-                to_date = form.cleaned_data['to_date'].strftime('%Y-%m-%d')
+                from_date_obj = form.cleaned_data['from_date']
+                to_date_obj = form.cleaned_data['to_date']
                 mode = form.cleaned_data['mode']
 
                 stations = RainfallStation.objects.filter(status=True) if not selected_station else [selected_station]
@@ -191,12 +219,26 @@ class RainfallSyncAdmin(admin.ModelAdmin):
                 def stream_rainfall():
                     yield f"DATA:START:{len(stations)}\n"
                     for index, station in enumerate(stations, 1):
-                        out = StringIO()
-                        call_command('sync_rainfall_data', f'--{mode}', 
-                                     station_code=station.station_code, 
-                                     from_date=from_date, to_date=to_date, stdout=out)
-                        yield f"DATA:MSG:{out.getvalue()}\n"
-                        yield f"DATA:PROGRESS:{index}\n"
+                        try:
+                            out = StringIO()
+                            call_command('sync_rainfall_data', f'--{mode}', 
+                                         station_code=station.station_code, 
+                                         from_date=from_date_obj.strftime('%Y-%m-%d'), 
+                                         to_date=to_date_obj.strftime('%Y-%m-%d'), 
+                                         stdout=out)
+                            yield f"DATA:MSG:{out.getvalue()}\n"
+                            yield f"DATA:PROGRESS:{index}\n"
+                        except Exception as e:
+                            yield f"DATA:MSG:Error at {station.name}: {str(e)}\n"
+
+                    # --- UPDATE LAST UPDATE DATE TABLE ---
+                    try:
+                        # Use the 'to_date' from the form as the official last update
+                        FfwcLastUpdateDate.objects.create(last_update_date=to_date_obj)
+                        yield f"DATA:MSG:>>> System update date set to {to_date_obj}.\n"
+                    except Exception as e:
+                        yield f"DATA:MSG:>>> Warning: Table update failed: {str(e)}\n"
+
                     yield f"DATA:COMPLETE:Rainfall Sync Finished.\n"
 
                 return StreamingHttpResponse(stream_rainfall(), content_type='text/plain')
@@ -205,6 +247,88 @@ class RainfallSyncAdmin(admin.ModelAdmin):
 
         context = {**self.admin_site.each_context(request), 'form': form, 'opts': self.model._meta, 'title': 'Rainfall Data Sync'}
         return render(request, "admin/sync_hydro_form.html", context)
+
+# @admin.register(RainfallSync)
+# class RainfallSyncAdmin(admin.ModelAdmin):
+#     list_display = ('station_id', 'observation_date', 'rainfall')
+#     change_list_template = "admin/rainfall_sync_list.html"
+
+#     def get_urls(self):
+#             urls = super().get_urls()
+#             return [
+#                 path('execute-rainfall-sync/', self.admin_site.admin_view(self.sync_view), name='execute-rainfall-sync'),
+#                 path('execute-rainfall-hourly-sync/', self.admin_site.admin_view(self.hourly_sync_view), name='execute-rainfall-hourly-sync'),
+#             ] + urls
+
+#     def hourly_sync_view(self, request):
+#             if request.method == 'POST':
+#                 # Use the Rainfall specific hourly form here
+#                 form = RainfallHourlySyncForm(request.POST) 
+#                 if form.is_valid():
+#                     selected_station = form.cleaned_data['station']
+#                     hours = form.cleaned_data['hours']
+#                     mode = form.cleaned_data['mode']
+
+#                     # Ensure we are filtering RainfallStation
+#                     stations = RainfallStation.objects.filter(status=True) if not selected_station else [selected_station]
+
+#                     def stream_rainfall_hourly():
+#                         yield f"DATA:START:{len(stations)}\n"
+#                         for index, station in enumerate(stations, 1):
+#                             out = StringIO()
+#                             # Ensure this calls the rainfall hourly command
+#                             call_command(
+#                                 'sync_rainfall_hourly', 
+#                                 f'--{mode}', 
+#                                 station_code=station.station_code, 
+#                                 hours=hours, 
+#                                 stdout=out
+#                             )
+#                             yield f"DATA:MSG:{out.getvalue()}\n"
+#                             yield f"DATA:PROGRESS:{index}\n"
+#                         yield f"DATA:COMPLETE:Rainfall Hourly Sync Finished.\n"
+                    
+#                     return StreamingHttpResponse(stream_rainfall_hourly(), content_type='text/plain')
+#             else:
+#                 # Use the Rainfall specific hourly form here
+#                 form = RainfallHourlySyncForm()
+
+#             context = {
+#                 **self.admin_site.each_context(request), 
+#                 'form': form, 
+#                 'opts': self.model._meta, 
+#                 'title': 'Rainfall Hourly Sync'
+#             }
+#             return render(request, "admin/sync_hydro_form.html", context)
+
+#     def sync_view(self, request):
+#         if request.method == 'POST':
+#             form = RainfallSyncForm(request.POST)
+#             if form.is_valid():
+#                 selected_station = form.cleaned_data['station']
+#                 from_date = form.cleaned_data['from_date'].strftime('%Y-%m-%d')
+#                 to_date = form.cleaned_data['to_date'].strftime('%Y-%m-%d')
+#                 mode = form.cleaned_data['mode']
+
+#                 stations = RainfallStation.objects.filter(status=True) if not selected_station else [selected_station]
+
+#                 def stream_rainfall():
+#                     yield f"DATA:START:{len(stations)}\n"
+#                     for index, station in enumerate(stations, 1):
+#                         out = StringIO()
+#                         call_command('sync_rainfall_data', f'--{mode}', 
+#                                      station_code=station.station_code, 
+#                                      from_date=from_date, to_date=to_date, stdout=out)
+#                         yield f"DATA:MSG:{out.getvalue()}\n"
+#                         yield f"DATA:PROGRESS:{index}\n"
+#                     yield f"DATA:COMPLETE:Rainfall Sync Finished.\n"
+
+#                 return StreamingHttpResponse(stream_rainfall(), content_type='text/plain')
+#         else:
+#             form = RainfallSyncForm()
+
+#         context = {**self.admin_site.each_context(request), 'form': form, 'opts': self.model._meta, 'title': 'Rainfall Data Sync'}
+#         return render(request, "admin/sync_hydro_form.html", context)
 
 
 # Existing Codes before Adding SMS interface

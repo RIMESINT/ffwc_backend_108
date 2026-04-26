@@ -37,6 +37,9 @@ from django.db.models import Avg
 from django.db.models import Subquery, OuterRef, F, Case, When, Value, FloatField, CharField
 from django.db.models.functions import Coalesce
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+
 from collections import OrderedDict
 import pandas as pd
 
@@ -4486,29 +4489,80 @@ def update_district_flood_alert(request, id):
     }, status=status.HTTP_200_OK)
 
 
-class DistrictFloodAlertCreateView(generics.CreateAPIView):
+# class DistrictFloodAlertCreateView(generics.CreateAPIView):
     
-    queryset = models.DistrictFloodAlert.objects.all()
-    serializer_class = serializers.DistrictFloodAlertSerializer
+#     queryset = models.DistrictFloodAlert.objects.all()
+#     serializer_class = serializers.DistrictFloodAlertSerializer
 
-    def create(self, request, *args, **kwargs):
-        try:
-            # return super().create(request, *args, **kwargs)
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            self.perform_create(serializer)
+#     def create(self, request, *args, **kwargs):
+#         try:
+#             # return super().create(request, *args, **kwargs)
+#             serializer = self.get_serializer(data=request.data)
+#             serializer.is_valid(raise_exception=True)
+#             self.perform_create(serializer)
             
-            return Response({
-                "message": "Successfully flood status created."
-            }, status=status.HTTP_200_OK)
+#             return Response({
+#                 "message": "Successfully flood status created."
+#             }, status=status.HTTP_200_OK)
             
-        except IntegrityError:
+#         except IntegrityError:
+#             return Response(
+#                 {"error": "Alert for this district and date already exists."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+
+from rest_framework.authentication import SessionAuthentication, BasicAuthentication
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import IsAuthenticated
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def district_alerts_create_single(request):
+    """
+    POST: Create or Update a District Flood Alert (Upsert).
+    Works exactly like update_district_flood_alert but identifies by date/district.
+    """
+    if request.method == 'GET':
+        return Response({"detail": "Authorized. Use 'Raw data' tab to POST."}, status=status.HTTP_200_OK)
+
+    if request.method == 'POST':
+        # 1. Capture fields from payload (Mirroring your PUT logic style)
+        alert_type_id = request.data.get('alert_type')
+        alert_date = request.data.get('alert_date')
+        district_name = request.data.get('district_name')
+
+        if not all([alert_type_id, alert_date, district_name]):
             return Response(
-                {"error": "Alert for this district and date already exists."},
+                {"error": "alert_type, alert_date, and district_name are all required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-            
+        
+        # 2. Match the alert_type (Mirroring your PUT logic)
+        try:
+            new_alert_type = models.WaterlevelAlert.objects.get(pk=alert_type_id)
+        except models.WaterlevelAlert.DoesNotExist:
+            return Response(
+                {"error": f"Invalid alert_type ID: {alert_type_id}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 3. Perform Upsert (Logic update)
+        # Instead of filter(pk=id).update(), we find by Date+District
+        obj, created = models.DistrictFloodAlert.objects.update_or_create(
+            alert_date=alert_date,
+            district_name=district_name,
+            defaults={'alert_type': new_alert_type}
+        )
 
+        # 4. Success Response (Mirroring your PUT response style)
+        verb = "created" if created else "updated"
+        return Response({
+            "message": f"Successfully {verb} flood status for {district_name} on {alert_date}",
+            "id": obj.id
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 from data_load.models import BulletinRelatedManue
 from data_load.serializers import BulletinRelatedManueSerializer

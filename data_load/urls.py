@@ -259,6 +259,9 @@ urlpatterns = [
         name='district-alerts-update' 
     ),
 
+    # path('v1/district_alerts_create_single/', views.DistrictFloodAlertCreateView.as_view(), name='district-alert-upsert'),
+    path('v1/district_alerts_create_single/', views.district_alerts_create_single, name='district-alert-upsert'),
+
     path(
         'v1/ens_model_choices_list/<int:station_id>/<str:date>/', 
         views.EnsModelChoiceListAPI.as_view(), 
