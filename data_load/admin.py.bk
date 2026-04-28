@@ -43,9 +43,7 @@ from django.urls import path, reverse
 from django.http import HttpResponseRedirect, JsonResponse 
 from celery.result import AsyncResult,states
 from .tasks import process_observations_csv,import_forecast_files,import_experimental_forecast_files 
-from .tasks import generate_rainfall_map_task,generate_flood_alerts_task,generate_flood_summary_task
-
-
+from .tasks import generate_rainfall_map_task,generate_flood_alerts_task
 
 from .forms import CSVUploadForm, ForecastCsvImportForm 
 from .utils import ExportCsvMixin 
@@ -1003,42 +1001,6 @@ admin.site.register(MonsoonConfig, MonsoonConfigAdmin)
 from .models import ScheduledTask
 from data_load.tasks import generate_flood_alerts_task
 
-# @admin.register(ScheduledTask)
-# class ScheduledTaskAdmin(admin.ModelAdmin):
-#     list_display = ('task_name', 'is_enabled', 'description')
-#     list_filter = ('is_enabled',)
-#     search_fields = ('task_name', 'description')
-#     list_editable = ('is_enabled',)
-
-#     # Adds the custom URL for our button
-#     def get_urls(self):
-#         urls = super().get_urls()
-#         custom_urls = [
-#             path(
-#                 'run-flood-alerts/',
-#                 self.admin_site.admin_view(self.run_flood_alerts_view),
-#                 name='run-flood-alerts'
-#             ),
-#         ]
-#         return custom_urls + urls
-
-#     # The view that runs the flood alert task
-#     def run_flood_alerts_view(self, request):
-#         if not request.user.is_staff:
-#             messages.error(request, "You do not have permission to run this command.")
-#         elif request.method == 'POST':
-#             try:
-#                 generate_flood_alerts_task.delay()
-#                 messages.success(request, "Flood alert generation started in the background.")
-#             except Exception as e:
-#                 messages.error(request, f"Error starting flood alert task: {str(e)}")
-        
-#         # Redirect back to the main admin dashboard
-#         return HttpResponseRedirect('/admin/')
-
-
-
-
 @admin.register(ScheduledTask)
 class ScheduledTaskAdmin(admin.ModelAdmin):
     list_display = ('task_name', 'is_enabled', 'description')
@@ -1046,67 +1008,31 @@ class ScheduledTaskAdmin(admin.ModelAdmin):
     search_fields = ('task_name', 'description')
     list_editable = ('is_enabled',)
 
+    # Adds the custom URL for our button
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
-            # Keep your existing redirect view
-            path('run-flood-alerts/', self.admin_site.admin_view(self.run_flood_alerts_view), name='run-flood-alerts'),
-            
-            # AJAX-friendly views for the Dashboard Buttons
-            path('run-flood-summary-json/', self.admin_site.admin_view(self.run_flood_summary_json), name='run-flood-summary-json'),
-            path('run-rainfall-map-json/', self.admin_site.admin_view(self.run_rainfall_map_json), name='run-rainfall-map-json'),
-            # ADD THIS LINE:
-            path('run-flood-alerts-json/', self.admin_site.admin_view(self.run_flood_alerts_json), name='run-flood-alerts-json'),
+            path(
+                'run-flood-alerts/',
+                self.admin_site.admin_view(self.run_flood_alerts_view),
+                name='run-flood-alerts'
+            ),
         ]
         return custom_urls + urls
 
-    # --- Existing View (Redirects) ---
+    # The view that runs the flood alert task
     def run_flood_alerts_view(self, request):
         if not request.user.is_staff:
-            messages.error(request, "You do not have permission.")
+            messages.error(request, "You do not have permission to run this command.")
         elif request.method == 'POST':
             try:
                 generate_flood_alerts_task.delay()
-                messages.success(request, "Flood alert generation started.")
+                messages.success(request, "Flood alert generation started in the background.")
             except Exception as e:
-                messages.error(request, f"Error: {str(e)}")
+                messages.error(request, f"Error starting flood alert task: {str(e)}")
+        
+        # Redirect back to the main admin dashboard
         return HttpResponseRedirect('/admin/')
-
-    
-    @method_decorator(csrf_protect)
-    @method_decorator(require_POST)
-    def run_flood_alerts_json(self, request):
-        """NEW: View to trigger Flood Alerts with Progress Bar support"""
-        if not request.user.is_staff:
-            return JsonResponse({'status': 'error', 'message': "Unauthorized"}, status=403)
-        try:
-            from .tasks import generate_flood_alerts_task
-            task = generate_flood_alerts_task.delay()
-            return JsonResponse({'status': 'success', 'task_id': task.id, 'message': 'Flood Alerts task started.'})
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-
-    @method_decorator(csrf_protect)
-    @method_decorator(require_POST)
-    def run_flood_summary_json(self, request):
-        if not request.user.is_staff:
-            return JsonResponse({'status': 'error', 'message': "Unauthorized"}, status=403)
-        try:
-            task = generate_flood_summary_task.delay()
-            return JsonResponse({'status': 'success', 'task_id': task.id, 'message': 'Flood Summary task started.'})
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
-
-    @method_decorator(csrf_protect)
-    @method_decorator(require_POST)
-    def run_rainfall_map_json(self, request):
-        if not request.user.is_staff:
-            return JsonResponse({'status': 'error', 'message': "Unauthorized"}, status=403)
-        try:
-            task = generate_rainfall_map_task.delay()
-            return JsonResponse({'status': 'success', 'task_id': task.id, 'message': 'Rainfall Map task started.'})
-        except Exception as e:
-            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
 
 from .models import DistrictFloodAlertAutoUpdate 
@@ -1121,3 +1047,4 @@ admin.site.register(JsonEntry)
 
 
 # Adding SMS-API Interface in Admin 
+

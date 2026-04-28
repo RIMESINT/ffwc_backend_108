@@ -1,17 +1,14 @@
 import logging
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta
 from collections import defaultdict
-
 from django.core.management.base import BaseCommand
 from django.db.models import Max
 from django.db import transaction
 from django.utils import timezone
-
+from decimal import Decimal # Added for type checking if needed
 from data_load import models
 
 logger = logging.getLogger(__name__)
-
-INTERNAL_FLOOD_LEVEL_KEYS = ["normal", "warning", "flood", "severe", "na"]
 
 DISTRICT_NAME_MAPPING = {
     "moulvi bazar": "Maulvibazar",
@@ -22,127 +19,107 @@ DISTRICT_NAME_MAPPING = {
 }
 
 class Command(BaseCommand):
-    help = 'Generates flood alerts. Shows DL and WL for debugging.'
+    help = 'Generates alerts with shell tracing and fixed decimal/float math.'
 
     def add_arguments(self, parser):
         parser.add_argument('date', type=str, nargs='?', help='YYYY-MM-DD')
 
     def calculate_flood_level(self, water_level, danger_level):
-        # Treat 0.0 as invalid/missing danger level to prevent false Severe alerts
-        if danger_level is None or danger_level <= 0 or water_level is None or water_level < 0:
+        try:
+            # Force everything to float to avoid TypeError
+            wl = float(water_level) if water_level is not None else None
+            dl = float(danger_level) if danger_level is not None else None
+        except (ValueError, TypeError):
+            return "na"
+
+        if dl is None or dl <= 0 or wl is None or wl < 0:
             return "na"
         
-        if water_level >= danger_level + 1:
+        # Priority Logic
+        if wl >= (dl + 1.0):
             return "severe"
-        elif water_level >= danger_level:
+        elif wl >= dl:
             return "flood"
-        elif water_level >= danger_level - 0.5:
+        elif wl >= (dl - 0.5):
             return "warning"
         else:
             return "normal"
 
     def handle(self, *args, **options):
-        # 1. Fetch skip settings
-        try:
-            restricted_qs = models.DistrictFloodAlertAutoUpdate.objects.filter(
-                auto_update=True
-            ).values_list('district_name', flat=True)
-            do_not_update_set = {name.lower().strip() for name in restricted_qs}
-            
-            # Ensure mapped names are also in the skip set
-            for name in list(do_not_update_set):
-                for key, val in DISTRICT_NAME_MAPPING.items():
-                    if name == key or name == val.lower():
-                        do_not_update_set.add(key)
-                        do_not_update_set.add(val.lower())
-        except Exception as e:
-            logger.critical(f"Settings error: {e}")
-            return
-
-        # 2. Setup
         date_str = options['date']
-        start_date = datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else date.today()
+        target_date = datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else timezone.now().date()
         
-        all_waterlevel_alerts = models.WaterlevelAlert.objects.all()
-        alert_map = {alert.alert_type: alert for alert in all_waterlevel_alerts}
-        type_strings = {"severe": "Severe Flood", "flood": "Flood", "warning": "Warning", "normal": "Normal", "na": "N/A"}
+        day_start = timezone.make_aware(datetime.combine(target_date, datetime.min.time()))
+        day_end = timezone.make_aware(datetime.combine(target_date, datetime.max.time()))
+
+        # Get Peak Values
+        qs = models.WaterLevelObservation.objects.filter(observation_date__range=(day_start, day_end))
+        if not qs.exists():
+            qs = models.WaterLevelForecast.objects.filter(forecast_date__range=(day_start, day_end))
+        
+        data_dict = {
+            item['station_id__station_id']: item['max_wl'] 
+            for item in qs.values('station_id__station_id').annotate(max_wl=Max('water_level'))
+        }
 
         stations = models.Station.objects.filter(
-            district__isnull=False, danger_level__isnull=False, station_id__isnull=False
+            district__isnull=False, danger_level__isnull=False
         ).exclude(district='').values('station_id', 'district', 'danger_level', 'name')
 
-        # 3. Processing
-        for day_offset in range(1): # Limit to 1 day for debug if needed
-            current_date = start_date + timedelta(days=day_offset)
-            self.stdout.write(self.style.MIGRATE_HEADING(f"\n>>> Processing Date: {current_date}"))
+        district_max_status = defaultdict(lambda: "na")
+        severity_rank = {"severe": 4, "flood": 3, "warning": 2, "normal": 1, "na": 0}
+
+        # --- SHELL TRACE START ---
+        self.stdout.write(self.style.MIGRATE_HEADING(f"\n--- TRACING NETROKONA STATIONS FOR {target_date} ---"))
+        
+        for station in stations:
+            raw_dist = station['district'].lower().strip()
+            norm_name = DISTRICT_NAME_MAPPING.get(raw_dist, raw_dist).lower().strip()
             
-            day_start = timezone.make_aware(datetime.combine(current_date, datetime.min.time()))
-            day_end = timezone.make_aware(datetime.combine(current_date, datetime.max.time()))
-
-            # Fetch water levels
-            qs = models.WaterLevelObservation.objects.filter(observation_date__range=(day_start, day_end))
-            if not qs.exists():
-                qs = models.WaterLevelForecast.objects.filter(forecast_date__range=(day_start, day_end))
+            sid = station['station_id']
+            # Convert DL to float immediately
+            dl = float(station['danger_level']) if station['danger_level'] else 0.0
+            # Get WL and convert to float immediately
+            raw_wl = data_dict.get(sid)
+            wl = float(raw_wl) if raw_wl is not None else None
             
-            latest_data = qs.values('station_id__station_id').annotate(max_wl=Max('water_level'))
-            data_dict = {item['station_id__station_id']: item['max_wl'] for item in latest_data}
+            status = self.calculate_flood_level(wl, dl)
 
-            district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
-
-            for station in stations:
-                raw_district = station['district'].lower().strip()
-                normalized_name = DISTRICT_NAME_MAPPING.get(raw_district, station['district']).lower().strip()
+            # Trace for Netrokona
+            if norm_name == "netrokona":
+                # Calculation is now float - float
+                diff = (wl - dl) if wl is not None else 0.0
+                color = self.style.ERROR if status in ['flood', 'severe'] else self.style.WARNING if status == 'warning' else self.style.SUCCESS
                 
-                sid = station['station_id']
-                status = "na"
-                wl_val = "N/A"
-                dl_val = float(station['danger_level'])
-
-                if sid in data_dict and data_dict[sid] is not None:
-                    wl_val = float(data_dict[sid])
-                    status = self.calculate_flood_level(wl_val, dl_val)
-                    district_alerts[normalized_name][status] += 1
-                else:
-                    district_alerts[normalized_name]["na"] += 1
-
-                # Progress Print with WL and DL
-                if status == "normal":
-                    status_str = self.style.SUCCESS(status.upper())
-                elif status in ["flood", "severe"]:
-                    status_str = self.style.ERROR(status.upper())
-                else:
-                    status_str = status.upper()
-
-                # ADDED DL TO PRINT FOR DEBUGGING
                 self.stdout.write(
-                    f"  Station: {sid:<6} | {station['name'][:12]:<12} | "
-                    f"Dist: {normalized_name.capitalize():<15} | "
-                    f"WL: {str(wl_val):>6} | DL: {str(dl_val):>6} | Status: {status_str}"
+                    f"Station: {sid:<6} | Name: {station['name']:<15} | "
+                    f"WL: {str(wl) if wl is not None else 'N/A':>6} | DL: {str(dl):>6} | Diff: {diff:>6.2f}m | "
+                    f"Result: {color(status.upper())}"
                 )
 
-            # 4. Save
-            with transaction.atomic():
-                for district_key, levels in district_alerts.items():
-                    if district_key in do_not_update_set:
-                        self.stdout.write(self.style.NOTICE(f"  [SKIP] {district_key.capitalize()} (auto_update=1)"))
-                        continue
+            if severity_rank[status] > severity_rank[district_max_status[norm_name]]:
+                district_max_status[norm_name] = status
 
-                    max_level = "na"
-                    for lvl in ["severe", "flood", "warning", "normal"]:
-                        if levels[lvl] > 0:
-                            max_level = lvl
-                            break
-                    
-                    db_label = type_strings[max_level]
-                    alert_obj = alert_map.get(db_label)
+        self.stdout.write(self.style.MIGRATE_HEADING("--- END OF TRACE ---\n"))
 
-                    if alert_obj:
-                        final_name = DISTRICT_NAME_MAPPING.get(district_key, district_key).capitalize()
-                        if final_name.lower() == "maulvibazar": final_name = "Maulvibazar"
+        # Database Update
+        with transaction.atomic():
+            alert_map = {alert.alert_type: alert for alert in models.WaterlevelAlert.objects.all()}
+            type_labels = {"severe": "Severe Flood", "flood": "Flood", "warning": "Warning", "normal": "Normal", "na": "N/A"}
 
-                        models.DistrictFloodAlert.objects.update_or_create(
-                            alert_date=current_date,
-                            district_name=final_name,
-                            defaults={'alert_type': alert_obj}
-                        )
-                        self.stdout.write(f"  [DB UPDATE] {final_name} -> {db_label}")
+            # Clear old records for this date
+            models.DistrictFloodAlert.objects.filter(alert_date=target_date).delete()
+
+            for dist_key, max_status in district_max_status.items():
+                db_label = type_labels[max_status]
+                alert_obj = alert_map.get(db_label)
+                if alert_obj:
+                    # Title case the key or use mapping to ensure Maulvibazar etc.
+                    display_name = DISTRICT_NAME_MAPPING.get(dist_key, dist_key).title()
+                    models.DistrictFloodAlert.objects.create(
+                        alert_date=target_date,
+                        district_name=display_name,
+                        alert_type=alert_obj
+                    )
+        
+        self.stdout.write(self.style.SUCCESS(f"Finished processing alerts for {target_date}"))

@@ -933,44 +933,44 @@ def generate_rainfall_map_task(self):
 @shared_task(bind=True)
 def generate_flood_alerts_task(self):
     """
-    Celery task to run the 'generate_flood_alerts' management command.
+    Consolidated Celery task to run 'generate_flood_alerts' with progress tracking.
     """
     progress_recorder = ProgressRecorder(self)
-    total_steps = 100 # Adjust this based on your command's workload
-
+    total_steps = 100 
     logger.info("Starting flood alerts generation")
 
     try:
-        # You can customize the progress updates if your command has distinct stages.
-        # For a simple command, a single progress update at the beginning and end is fine.
-        progress_recorder.set_progress(10, total_steps, description='Initializing flood alerts command...')
-
+        progress_recorder.set_progress(10, total_steps, description='Initializing flood alerts...')
+        
         # Call the management command
+        from django.core.management import call_command
         call_command('generate_flood_alerts')
 
-        # Set final progress and success message
         progress_recorder.set_progress(total_steps, total_steps, description="Flood alerts generation completed!")
-        
-        logger.info("Flood alerts generation completed.")
         return {'status': 'SUCCESS', 'message': 'Flood alerts generated successfully!'}
     except Exception as e:
         logger.error(f"Error in flood alerts task: {str(e)}")
-        # On failure, set progress to 100% with an error message
         progress_recorder.set_progress(total_steps, total_steps, description=f"Task failed: {str(e)}")
-        # Return a failure status and message
-        return {'status': 'FAILURE', 'message': f'Error generating flood alerts: {str(e)}'}
+        return {'status': 'FAILURE', 'message': f'Error: {str(e)}'}
 
 
-
-@shared_task
-def generate_flood_alerts_task():
+@shared_task(bind=True)
+def generate_flood_summary_task(self):
     """
-    A background task to run the generate_flood_alerts management command.
+    Celery task to run 'generate_flood_summary --force'
     """
+    progress_recorder = ProgressRecorder(self)
+    logger.info("Starting Flood Summary generation (Force)")
+    
     try:
-        logger.info("Starting flood alert generation task.")
-        call_command('generate_flood_alerts') 
-        logger.info("Flood alert generation task completed.")
+        progress_recorder.set_progress(20, 100, description='Initializing command...')
+        
+        # We use force=True to replicate the --force flag
+        call_command('generate_flood_summary', force=True)
+        
+        progress_recorder.set_progress(100, 100, description="Flood summary generated!")
+        return {'status': 'SUCCESS', 'message': 'Flood summary generated successfully!'}
     except Exception as e:
-        logger.error(f"Error in flood alert generation task: {str(e)}")
-        raise
+        logger.error(f"Error in flood summary task: {str(e)}")
+        progress_recorder.set_progress(100, 100, description=f"Task failed: {str(e)}")
+        return {'status': 'FAILURE', 'message': f'Error: {str(e)}'}

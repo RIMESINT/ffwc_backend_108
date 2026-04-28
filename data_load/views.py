@@ -2793,6 +2793,7 @@ def district_flood_alerts_forecast_by_date(request, date):
 #     return Response(result)
 
 
+# Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast
 
 @api_view(['GET'])
 def MonsoonFlashFlood(request,**kwargs):
@@ -2800,14 +2801,14 @@ def MonsoonFlashFlood(request,**kwargs):
     forecast_date = kwargs['forecast_date']
     basin_id = kwargs['basin_id']
 
-    latest_record = models.MonsoonBasinWiseFlashFloodForecast.objects.latest('prediction_date')
+    latest_record = models.Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.latest('prediction_date')
     latest_date = latest_record.prediction_date  # Access the date field
 
-    first_query =  models.MonsoonBasinWiseFlashFloodForecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+    first_query =  models.Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
     
     if not first_query.exists():
         forecast_date = latest_date
-        second_query =  models.MonsoonBasinWiseFlashFloodForecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+        second_query =  models.Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
         forecasts = second_query
     else:
         forecasts = first_query
