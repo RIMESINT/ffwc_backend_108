@@ -11,7 +11,9 @@ class Command(BaseCommand):
         source_host = "203.156.108.110"
         source_user = "nazmul"
         source_pass = "rootbeer77"
-        source_dir = "/home/nazmul/ffwc/hres_diana/backup/"
+        # source_dir = "/home/nazmul/ffwc/hres_diana/backup/"
+        source_dir = "/home/nazmul/ffwc/hres_diana/backup/
+        # ec_atmos_20260428_00.nc
         local_dir = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_0_2/"
 
         if not os.path.exists(local_dir):
