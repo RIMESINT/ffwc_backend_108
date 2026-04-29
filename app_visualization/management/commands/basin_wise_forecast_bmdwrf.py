@@ -1,10 +1,14 @@
 # -*- coding: utf-8 -*-
+import os
+import numpy as np
+import fiona
+import datetime as pydt
+from datetime import datetime as dt, timedelta as delt
+
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from django.utils import timezone
-import os, sys, json, numpy as np, fiona
-import datetime as pydt
-from datetime import datetime as dt, timedelta as delt
+
 from pyscissor import scissor 
 from netCDF4 import Dataset as nco, num2date
 from shapely.geometry import shape
@@ -17,7 +21,8 @@ from app_visualization.models import (
 from ffwc_django_project.project_constant import app_visualization
 
 # Constants
-SYSTEM_STATE_NAME_BMD = app_visualization['system_state_name'][4]
+# Based on your API response, both sources use this specific state name
+SYSTEM_STATE_NAME_BMD = "BMDWRF_HRES_VIS_DAILY"
 BMDWRF_BASE_URL = settings.BASE_DIR
 
 def r2(val):
@@ -27,7 +32,7 @@ def r2(val):
     return max(0.0, round(float(val), 2))
 
 class Command(BaseCommand):
-    help = 'Process BMDWRF NetCDF into ForecastDaily for Source ID 4 (BMDWRF)'
+    help = 'Process BMDWRF NetCDF into ForecastDaily and update SystemState for IDs 2 and 4'
 
     def add_arguments(self, parser):
         parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
@@ -40,7 +45,7 @@ class Command(BaseCommand):
         try:
             shf = fiona.open(file_path, 'r') 
         except Exception as e:
-            print(f"Error opening {file_path}: {e}")
+            self.stdout.write(self.style.ERROR(f"Error opening {file_path}: {e}"))
             return
 
         lats = ncf.variables['lat'][:]
@@ -74,7 +79,6 @@ class Command(BaseCommand):
                     dt_start = timezone.make_aware(self.to_pydt(dates_raw[day_start_idx]))
                     dt_end   = timezone.make_aware(self.to_pydt(dates_raw[day_end_idx]))
 
-                    # FIX: Use np.maximum to clip negative values to 0
                     diff = rf_total[day_end_idx, 0, :, :] - rf_total[day_start_idx, 0, :, :]
                     rf_day = np.maximum(0, diff)
                     
@@ -105,10 +109,8 @@ class Command(BaseCommand):
                     dt_s = timezone.make_aware(self.to_pydt(dates_raw[s_idx]) + delt(hours=6))
                     dt_e = timezone.make_aware(self.to_pydt(dates_raw[e_idx]) + delt(hours=6))
 
-                    # FIX: Use np.maximum to clip negative values to 0
                     diff_step = rf_total[e_idx, 0, :, :] - rf_total[s_idx, 0, :, :]
                     rf_step = np.maximum(0, diff_step)
-                    
                     rf_avg_step = np.average(rf_step, weights=weight_grid)
 
                     upazila_data_steps.append(ForecastSteps(
@@ -130,19 +132,31 @@ class Command(BaseCommand):
         
         shf.close()
 
-    def update_state(self, forecast_date_str, source_obj):
+    def update_state(self, forecast_date_str, source_ids):
+        """
+        Updates SystemState for both source ID 2 and 4.
+        forecast_date_str: 'YYYY-MM-DD'
+        source_ids: List of IDs [2, 4]
+        """
         date_obj = dt.strptime(forecast_date_str, '%Y-%m-%d')
         aware_date = timezone.make_aware(date_obj)
-        SystemState.objects.update_or_create(
-            source=source_obj, 
-            name=SYSTEM_STATE_NAME_BMD,
-            defaults={'last_update': aware_date}
-        )
-        print(f"System state updated for {source_obj.name}")
+        
+        for sid in source_ids:
+            try:
+                source_instance = Source.objects.get(id=sid)
+                SystemState.objects.update_or_create(
+                    source=source_instance, 
+                    name=SYSTEM_STATE_NAME_BMD,
+                    defaults={'last_update': aware_date}
+                )
+                self.stdout.write(self.style.SUCCESS(f"Updated SystemState for {source_instance.name} (ID: {sid})"))
+            except Source.DoesNotExist:
+                self.stdout.write(self.style.WARNING(f"Source ID {sid} not found in database. Skipping..."))
 
     def main(self, date_str):
         forecast_date = dt.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d') 
         
+        # We use Source 4 to determine file paths and context
         try:
             source_obj = Source.objects.get(pk=4)
         except Source.DoesNotExist:
@@ -152,7 +166,7 @@ class Command(BaseCommand):
         nc_loc = os.path.join(BMDWRF_BASE_URL, nc_dir.strip('/'), f'wrf_out_{date_str}00.nc')
         
         if not os.path.exists(nc_loc):
-            print(f"Error: NC file not found at {nc_loc}")
+            self.stdout.write(self.style.ERROR(f"Error: NC file not found at {nc_loc}"))
             return
 
         ncf = nco(nc_loc, 'r')
@@ -164,7 +178,9 @@ class Command(BaseCommand):
                 if os.path.exists(file_path):
                     self.gen_upazila_forecast(forecast_date, source_obj, ncf, file_path, basin)
 
-        self.update_state(forecast_date, source_obj)
+        # Update system state for both 2 (VIS) and 4 (Basin)
+        self.update_state(forecast_date, [2, 4])
+        
         ncf.close()
 
     def handle(self, *args, **kwargs):

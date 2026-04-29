@@ -5,6 +5,7 @@ from django import forms
 from app_water_watch_mobile.models import (
     WaterWatchWaterLevelStationForMobileUser,
     WaterWatchRFLevelStationForMobileUser,
+    WaterLevelInputForMobileUser
 )
 
 # Import the related models from their apps
@@ -160,3 +161,78 @@ class RFWaterWatchAdmin(admin.ModelAdmin):
         return f"{obj.water_level_station.station_id} — {obj.water_level_station.name}"
     get_station_display.short_description = 'Station'
     get_station_display.admin_order_field = 'water_level_station__station_id'
+
+
+
+class WaterLevelInputForm(forms.ModelForm):
+    station = StationChoiceField(
+        queryset=Station.objects.all().order_by('station_id'),
+        required=False,
+        label="Station"
+    )
+    created_by = MobileUserChoiceField(
+        queryset=MobileAuthUser.objects.all().order_by('mobile_number'),
+        required=False,
+        label="Created by (Mobile User)"
+    )
+    updated_by = MobileUserChoiceField(
+        queryset=MobileAuthUser.objects.all().order_by('mobile_number'),
+        required=False,
+        label="Updated by (Mobile User)"
+    )
+
+    class Meta:
+        model = WaterLevelInputForMobileUser
+        fields = '__all__'
+
+
+@admin.register(WaterLevelInputForMobileUser)
+class WaterLevelInputForMobileUserAdmin(admin.ModelAdmin):
+    form = WaterLevelInputForm
+
+    list_display = (
+        'get_station_display',
+        'observation_date',
+        'water_level',
+        'get_creator_mobile',
+        'is_acepted',
+        'created_at',
+    )
+    
+    list_filter = ('is_acepted', 'observation_date', 'created_at')
+    
+    search_fields = (
+        'station__station_id',
+        'station__name',
+        'created_by__mobile_number',
+        'water_level',
+    )
+    
+    ordering = ('-observation_date',)
+    
+    # Use select_related to reduce SQL queries when loading the list view
+    list_select_related = ('station', 'created_by', 'updated_by')
+    
+    readonly_fields = ('created_at', 'updated_at')
+
+    fieldsets = (
+        ('Observation Details', {
+            'fields': ('station', 'observation_date', 'water_level', 'is_acepted')
+        }),
+        ('User Metadata', {
+            'fields': ('created_by', 'updated_by', 'created_at', 'updated_at'),
+        }),
+    )
+
+    # Helper methods for list_display
+    def get_station_display(self, obj):
+        if obj.station:
+            return f"{obj.station.station_id} — {obj.station.name}"
+        return "—"
+    get_station_display.short_description = 'Station'
+    get_station_display.admin_order_field = 'station__station_id'
+
+    def get_creator_mobile(self, obj):
+        return obj.created_by.mobile_number if obj.created_by else "—"
+    get_creator_mobile.short_description = 'Submitted By'
+    get_creator_mobile.admin_order_field = 'created_by__mobile_number'
