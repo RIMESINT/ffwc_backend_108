@@ -6,10 +6,14 @@ from rest_framework import permissions, viewsets, generics, status,serializers
 from django.contrib.auth.models import User
 from django.contrib.auth import authenticate
 from rest_framework_simplejwt.tokens import RefreshToken
-from userauth.models import UserAuthProfile, UserAuthProfileStations, UserAuthProfileIndianStations
+# from userauth.models import UserAuthProfileStations, UserAuthProfileIndianStations
+from userauth.models import Profile, UserAuthProfileStations, UserAuthProfileIndianStations
 from data_load.models import Station
 from indian_stations.models import IndianStations
 from .serializers import UserSerializer, RegisterSerializer,UserAuthProfileStationsSerializer
+
+# UserAuthProfile
+
 from urllib.parse import unquote
 
 import requests
@@ -87,11 +91,12 @@ class UserViewSet(viewsets.ViewSet):
             return Response({}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
+    
     def getUserProfileId(self, request, **kwargs):
         user_id = int(self.kwargs['user_id'])
         try:
-            profile_query = UserAuthProfile.objects.filter(user_id=user_id).values().first()
+            # Query the Profile model, not UserAuthProfile
+            profile_query = Profile.objects.filter(user_id=user_id).values().first()
             if profile_query:
                 profile_id = profile_query['id']
                 return Response({'profile_id': profile_id})
@@ -102,12 +107,16 @@ class UserViewSet(viewsets.ViewSet):
     def userProfileByUserId(self, request, **kwargs):
         user_id = int(self.kwargs['user_id'])
         try:
-            profile_query = UserAuthProfile.objects.filter(user_id=user_id).values().first()
+            # Query the Profile model
+            profile_query = Profile.objects.filter(user_id=user_id).values().first()
             if not profile_query:
                 return Response({"error": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
+            
             profile_id = profile_query['id']
+            # The station queries stay the same
             ffwc_station_query = UserAuthProfileStations.objects.filter(profile_id=profile_id).values_list('station_id', flat=True)
             indian_station_query = UserAuthProfileIndianStations.objects.filter(profile_id=profile_id).values_list('indianstations_id', flat=True)
+            
             list_of_user_station = {
                 'ffwc_stations': list(ffwc_station_query),
                 'indian_stations': list(indian_station_query),
@@ -115,6 +124,34 @@ class UserViewSet(viewsets.ViewSet):
             return Response(list_of_user_station)
         except Exception as e:
             return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    # def getUserProfileId(self, request, **kwargs):
+    #     user_id = int(self.kwargs['user_id'])
+    #     try:
+    #         profile_query = UserAuthProfile.objects.filter(user_id=user_id).values().first()
+    #         if profile_query:
+    #             profile_id = profile_query['id']
+    #             return Response({'profile_id': profile_id})
+    #         return Response({"error": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
+    #     except Exception as e:
+    #         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    # def userProfileByUserId(self, request, **kwargs):
+    #     user_id = int(self.kwargs['user_id'])
+    #     try:
+    #         profile_query = UserAuthProfile.objects.filter(user_id=user_id).values().first()
+    #         if not profile_query:
+    #             return Response({"error": "Profile not found"}, status=status.HTTP_404_NOT_FOUND)
+    #         profile_id = profile_query['id']
+    #         ffwc_station_query = UserAuthProfileStations.objects.filter(profile_id=profile_id).values_list('station_id', flat=True)
+    #         indian_station_query = UserAuthProfileIndianStations.objects.filter(profile_id=profile_id).values_list('indianstations_id', flat=True)
+    #         list_of_user_station = {
+    #             'ffwc_stations': list(ffwc_station_query),
+    #             'indian_stations': list(indian_station_query),
+    #         }
+    #         return Response(list_of_user_station)
+    #     except Exception as e:
+    #         return Response({"error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 user_by_id = UserViewSet.as_view({'get': 'userById'})
 user_status = UserViewSet.as_view({'get': 'userStatusByUser'})
