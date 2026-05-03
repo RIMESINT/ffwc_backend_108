@@ -1,0 +1,269 @@
+# Edit this file to introduce tasks to be run by cron.
+# 
+# Each task to run has to be defined through a single line
+# indicating with different fields when the task will be run
+# and what command to run for the task
+# 
+# To define the time you can provide concrete values for
+# minute (m), hour (h), day of month (dom), month (mon),
+# and day of week (dow) or use '*' in these fields (for 'any').
+# 
+# Notice that tasks will be started based on the cron's system
+# daemon's notion of time and timezones.
+# 
+# Output of the crontab jobs (including errors) is sent through
+# email to the user the crontab file belongs to (unless redirected).
+# 
+# For example, you can run a backup of all your user accounts
+# at 5 a.m every week with:
+# 0 5 * * 1 tar -zcf /var/backups/home.tgz /home/
+# 
+# For more information see the manual pages of crontab(5) and cron(8)
+# 
+# m h  dom mon dow   command
+
+#################################################################
+#################################################################
+### CRONTAB Timing SHAIF | FFWC Flash Flood Guidence
+#################################################################
+#################################################################
+# download data from sources for process
+#01 15 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/download_convert_crop_imd_gfs_data.sh
+#10 13 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/download_crop_bmdwrf_hres_data.sh
+#45 15 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/download_crop_ecmwf_hres_data.sh
+#15 15 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/download_merge_crop_imd_wrf_data.sh
+
+# Download Streamflow data 
+#30 18 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/download_stream_flow_forecast_data.sh
+
+# Basin wise Forecast data processing
+#10 22 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/basin_wise_forecast_bmdwrf.sh
+#10 22 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/basin_wise_forecast_ecmwf_hres.sh
+#10 22 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/basin_wise_forecast_imd_gfs.sh
+#10 22 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/basin_wise_forecast_imd_wrf.sh
+
+# Raster Forecast data processing
+#30 22 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/vis_bmd_wrf_process_forecast_map.sh
+#30 22 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/vis_ecmwf_hres_process_forecast_map.sh
+#30 22 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/vis_imd_gfs_process_forecast_map.sh
+#30 22 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/vis_imd_wrf_process_forecast_map.sh
+
+# Station wise Observation data processing
+#00 10 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/observation_imd_stations_wise_process.sh
+
+# Delete Old Files
+#00 10 * * * /home/ffwc/backend/ffwc_django_project/app_crontab/bash_script/ffwc/app_visualization/delete_old_files_and_data.sh
+
+#################################################################
+#################################################################
+### END CRONTAB Timing SHAIF | FFWC Flash Flood Guidence
+#################################################################
+#################################################################
+
+
+
+# Download Daily Observed for Flood Forecasting
+30 09,10,11 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/download_MSWEP.sh
+
+# Rainfall Distribution Map (Sajib)
+30 09,10,11,12 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_rainfall_distribution_map.sh
+30 09,10,11,12 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_rainfall_distribution_map_v2.sh
+
+# Flood Alerts (Sajib)
+30 09,10,11,12,15,16 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_flood_alerts.sh
+
+# Flood Summary (Sajib)
+30 09,10,11,12,15,16 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_flood_summary.sh
+
+
+# Basin Wise Flash Flood
+35 15,16,17,18,19,20 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_monsoon_basin_wise_flash_flood.sh
+35 15,16,17,18,19,20 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_ukmet_monsoon_basin_wise_flash_flood.sh
+
+
+# Probabilistic Flash Flood 
+35 15,16,17,18,19,20 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_monsoon_probabilistic_flash_flood.sh
+35 15,16,17,18,19,20 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_ukmet_monsoon_probabilistic_flash_flood.sh
+
+
+
+# Download Indian Station Data
+00 00 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/shellScripts/generate_indian_station_water.sh
+
+
+
+# --- Download Management Commands (Afternoon) ---
+# Download ECMWF 0.1, 0.2, UKMET Det, and Ensemble
+05 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ecmwf_0_1_forecast
+10 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ecmwf_0_2_forecast
+15 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ukmet_det_forecast
+20 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ukmet_ensemble
+
+# --- Monsoon & Pre-Monsoon Flash Flood Generation (Night - 22:45) ---
+# (Scheduled after your 22:30 Raster processing finishes)
+
+# BMDWRF
+45 22 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_bmdwrf_monsoon_basin_wise_flash_flood
+48 22 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_bmdwrf_pre_monsoon_basin_wise_flash_flood
+
+# ECMWF 0.2
+51 22 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_0_2_monsoon_basin_wise_flash_flood
+54 22 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_0_2_pre_monsoon_basin_wise_flash_flood
+
+# UKMET Deterministic
+57 22 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_monsoon_det_basin_wise_flash_flood
+00 23 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_pre_monsoon_det_basin_wise_flash_flood
+
+# UKMET Probabilistic/Ensemble
+05 23 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_pre_monsoon_probabilistic_flash_flood
+10 23 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_monsoon_probabilistic_flash_flood
+
+
+
+
+
+#################################################################
+#################################################################
+### CRONTAB Timing SHAIF | FFWC Flash Flood Guidence 108 REBASE
+#################################################################
+#################################################################
+# download data from sources for process
+01 15 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_convert_crop_imd_gfs_data.sh
+10 13 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_crop_bmdwrf_hres_data.sh
+45 15 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_crop_ecmwf_hres_data.sh
+15 15 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_merge_crop_imd_wrf_data.sh
+
+# Download Streamflow data 
+30 18 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_stream_flow_forecast_data.sh
+
+# Basin wise Forecast data processing
+10 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_bmdwrf.sh
+10 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_ecmwf_hres.sh
+10 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_imd_gfs.sh
+10 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_imd_wrf.sh
+10 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_ukmet_deterministic.sh
+
+
+
+
+# Raster Forecast data processing
+30 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_bmd_wrf_process_forecast_map.sh
+30 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_ecmwf_hres_process_forecast_map.sh
+30 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_imd_gfs_process_forecast_map.sh
+30 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_imd_wrf_process_forecast_map.sh
+30 22 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_ukmet_deterministic_process_forecast_map.sh
+
+
+
+# Station wise Observation data processing
+00 10 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/observation_imd_stations_wise_process.sh
+
+# Delete Old Files
+00 10 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/delete_old_files_and_data.sh
+
+#################################################################
+#################################################################
+### CRONTAB Timing SHAIF | FFWC Flash Flood Guidence 108 REBASE
+#################################################################
+#################################################################
+
+# Forecast Data Update - Daily at 12:00 PM
+# --- Basin-Wise Forecast Generation (Daily Morning) ---
+05 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_forecast_amalshid >> /home/rimes/forecast_logs.log 2>&1
+10 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_forecast_cumilla >> /home/rimes/forecast_logs.log 2>&1
+15 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_forecast_sunamganj >> /home/rimes/forecast_logs.log 2>&1
+20 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_forecast_sylhet >> /home/rimes/forecast_logs.log 2>&1
+
+
+# --- 1. DOWNLOAD COMMANDS (Afternoon) ---
+# Download ECMWF and UKMET raw forecast data
+00 14 * * * bash -lc '/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_crop_bmdwrf_hres_data' 
+05 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ecmwf_0_1_forecast
+10 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ecmwf_0_2_forecast
+15 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ukmet_det_forecast
+16 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ukmet_ensemble
+
+# --- 2. FLASH FLOOD GENERATION (Late Night) ---
+# Scheduled after 23:00 to ensure Rasters and Basin Forecasts (22:30) are finished
+
+# BMDWRF Monsoon & Pre-Monsoon
+17 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_bmdwrf_monsoon_basin_wise_flash_flood
+17  14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_bmdwrf_pre_monsoon_basin_wise_flash_flood
+
+# ECMWF Pre-Monsoon
+15 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_0_2_pre_monsoon_basin_wise_flash_flood
+20 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_0_2_pre_monsoon_basin_wise_flash_flood
+
+# --- ECMWF Ensemble & Probabilistic Flash Flood ---
+# Start Ensemble download at 17:30 (5:30 PM)
+30 17 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_ecmwf_ens_forecast
+
+# Generate Probabilistic Pre-Monsoon FF at 18:30 (6:30 PM)
+30 18 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_pre_monsoon_probabilistic_flash_flood
+
+# Generate Probabilistic Monsoon FF at 18:50 (6:50 PM)
+50 18 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_monsoon_probabilistic_flash_flood
+
+
+# UKMET Deterministic Monsoon & Pre-Monsoon
+20 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_monsoon_det_basin_wise_flash_flood
+25 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_pre_monsoon_det_basin_wise_flash_flood
+
+# UKMET Probabilistic Monsoon & Pre-Monsoon
+30 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_monsoon_probabilistic_flash_flood
+35 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_pre_monsoon_probabilistic_flash_flood
+
+
+
+30 14 * * * bash -lc '/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py vis_bmd_wrf_process_forecast_map'
+40 14 * * * bash -lc '/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py basin_wise_forecast_bmdwrf'
+
+40 16 * * * bash -lc '/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py vis_ukmet_deterministic_process_forecast_map'
+45 16 * * * bash -lc '/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py basin_wise_forecast_ukmet_deterministic'
+
+
+# ==============================================================================
+# --- RAINFALL ANOMALY GENERATION (NEW) ---
+# Scheduled after raw data downloads (14:00 - 15:30) 
+# ==============================================================================
+
+# --- BMD-WRF ANOMALY (Daily & Weekly) ---
+# Start after 14:40 (assuming BMD-WRF raw is available)
+50 14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py compute_bmd_anomaly
+00 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_bmd_anomaly_rasters
+05 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py compute_bmd_weekly_anomaly
+10 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_bmd_weekly_rasters
+
+# --- ECMWF ANOMALY (Daily & Weekly) ---
+# Start after 15:20 (after ECMWF download finishes)
+30 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py compute_ecmwf_anomaly
+40 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_anomaly_rasters
+45 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py compute_ecmwf_weekly_anomaly
+50 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_weekly_rasters
+
+# --- UKMET ANOMALY (Daily & Weekly) ---
+# Start after 16:00 (after UKMET download and flash flood runs)
+00 17 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py compute_ukmet_anomaly
+10 17 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_anomaly_rasters
+15 17 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py compute_ukmet_weekly_anomaly
+20 17 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ukmet_weekly_rasters
+
+
+# ==============================================================================
+# --- IMD-GFS RAINFALL ANOMALY GENERATION ---
+# Scheduled after raw IMD-GFS NetCDF arrival
+# ==============================================================================
+
+# 1. Compute Daily Anomaly NetCDF (Handles bucket subtraction & 0.125 to 0.1 regridding)
+30 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py compute_imd_gfs_anomaly
+
+# 2. Generate Daily GeoJSON Rasters and info.json
+40 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_imd_gfs_anomaly_rasters
+
+# 3. Compute Weekly (7-Day Mean) Anomaly NetCDF
+50 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py compute_imd_gfs_weekly_anomaly
+
+# 4. Generate Weekly GeoJSON Raster and info.weekly.json
+55 15 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_imd_gfs_weekly_rasters
+
+
