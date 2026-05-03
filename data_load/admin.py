@@ -1121,3 +1121,18 @@ admin.site.register(JsonEntry)
 
 
 # Adding SMS-API Interface in Admin 
+
+
+from django.contrib import admin
+from .models import BulletinRelatedManue
+
+@admin.register(BulletinRelatedManue)
+class BulletinRelatedManueAdmin(admin.ModelAdmin):
+    # Fields to display in the admin list view
+    list_display = ('title', 'title_bn', 'url')
+    
+    # Add a search bar for titles
+    search_fields = ('title', 'title_bn')
+    
+    # Optional: Add filters if you expect many entries
+    list_filter = ('title',)
