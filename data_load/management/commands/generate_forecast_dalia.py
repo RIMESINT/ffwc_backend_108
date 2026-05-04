@@ -6,7 +6,7 @@ import paramiko
 import re
 import warnings
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from django.core.management.base import BaseCommand
 from django.conf import settings
 
@@ -14,20 +14,21 @@ from django.conf import settings
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
 class Command(BaseCommand):
-    help = 'Fetch Dalia ensemble forecast + probability with terminal progress tracing'
+    help = 'Fetch Dalia ensemble forecast with nested fallback (New Path -> Old Path)'
 
     def handle(self, *args, **options):
         # 1. Setup
-        run_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        now = datetime.now()
+        run_datetime = now.strftime('%Y-%m-%d %H:%M:%S')
         self.stdout.write(f"[{run_datetime}] Starting Dalia forecast update...")
         
         REMOTE_HOST = '203.156.108.111'
         REMOTE_USER = 'mmb'
         REMOTE_PASS = 'mmb!@#$'
 
-        remote_base_dir = '/home/mmb/tank-teesta-new-auto/corrected_output/csv/'
-        # Note: Ensure this spelling matches the server (DALIA vs dalia)
-        target_filename = 'all_en_corr_DALIA.csv'
+        NEW_ROOT = '/home/mmb/Tank_All_Output/'
+        OLD_ROOT = '/home/mmb/tank-teesta-new-auto/corrected_output/csv/'
+        TARGET_FILE = 'all_en_corr_DALIA.csv'
         
         base_assets = os.path.join(settings.BASE_DIR, 'assets', 'flood-monitor-basin-forecast')
         os.makedirs(base_assets, exist_ok=True)
@@ -35,122 +36,107 @@ class Command(BaseCommand):
 
         fd1, temp_csv = tempfile.mkstemp(suffix='_dalia_main.csv')
         fd2, temp_pb_csv = tempfile.mkstemp(suffix='_dalia_pb.csv')
-        os.close(fd1)
-        os.close(fd2)
+        os.close(fd1); os.close(fd2)
 
         try:
-            # 2. SSH Connection
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            
-            self.stdout.write(f"--> Connecting to {REMOTE_HOST}...")
             ssh.connect(REMOTE_HOST, username=REMOTE_USER, password=REMOTE_PASS, timeout=30)
-            self.stdout.write(self.style.SUCCESS("--> SSH Connection established."))
             sftp = ssh.open_sftp()
-
-            # 3. Scan for date folders
-            all_entries = sftp.listdir(remote_base_dir)
-            date_folders = sorted([f for f in all_entries if re.match(r'^\d{8}$', f)], reverse=True)
-
-            if not date_folders:
-                raise Exception("No YYYYMMDD folders found on the remote server.")
 
             remote_file_path = None
             final_date_folder = None
+            current_active_root = NEW_ROOT
 
-            # 4. Locate the most recent valid file
-            for folder in date_folders:
-                candidate_path = f"{remote_base_dir}{folder}/{target_filename}"
+            # --- STEP 1: Try New Directory Structure ---
+            today_str = now.strftime('%Y%m%d')
+            yesterday_str = (now - timedelta(days=1)).strftime('%Y%m%d')
+            
+            for folder in [today_str, yesterday_str]:
+                candidate = f"{NEW_ROOT}{folder}/{TARGET_FILE}"
                 try:
-                    sftp.stat(candidate_path)
-                    remote_file_path = candidate_path
+                    sftp.stat(candidate)
+                    remote_file_path = candidate
                     final_date_folder = folder
-                    self.stdout.write(self.style.SUCCESS(f"--> Found target file in folder: {folder}"))
+                    self.stdout.write(self.style.SUCCESS(f"--> Found in NEW directory: {folder}"))
                     break
                 except IOError:
                     continue
 
+            # --- STEP 2: Try Old Directory Structure (Fallback) ---
             if not remote_file_path:
-                raise Exception(f"Could not find {target_filename} in recent folders.")
+                self.stdout.write(self.style.WARNING("--> Not found in NEW root. Checking OLD directory..."))
+                try:
+                    all_entries = sftp.listdir(OLD_ROOT)
+                    # Filter for YYYYMMDD folders and sort descending
+                    date_folders = sorted([f for f in all_entries if re.match(r'^\d{8}$', f)], reverse=True)
+                    
+                    for folder in date_folders[:3]: # Check top 3 most recent
+                        candidate = f"{OLD_ROOT}{folder}/{TARGET_FILE}"
+                        try:
+                            sftp.stat(candidate)
+                            remote_file_path = candidate
+                            final_date_folder = folder
+                            current_active_root = OLD_ROOT
+                            self.stdout.write(self.style.SUCCESS(f"--> Found in OLD directory fallback: {folder}"))
+                            break
+                        except IOError:
+                            continue
+                except Exception as e:
+                    self.stdout.write(self.style.ERROR(f"--> Could not access OLD directory: {e}"))
 
-            # 5. Download Main Forecast
+            if not remote_file_path:
+                raise Exception("Data not found in either NEW or OLD directory structures.")
+
+            # 5. Download & Process
             sftp.get(remote_file_path, temp_csv)
-
-            # 6. Data Processing
             df = pd.read_csv(temp_csv)
             time_col = 'Time' if 'Time' in df.columns else 'Date'
             df[time_col] = pd.to_datetime(df[time_col]).dt.tz_localize(None)
 
-            forecast_start = pd.to_datetime(final_date_folder, format='%Y%m%d')
-            df = df[df[time_col] >= forecast_start].copy()
+            # Slicing from forecast date
+            f_start = pd.to_datetime(final_date_folder, format='%Y%m%d')
+            df = df[df[time_col] >= f_start].copy()
 
             ensemble_cols = [col for col in df.columns if col.startswith('EN#')]
+            p05 = df[ensemble_cols].quantile(0.05, axis=1).round(3).tolist()
             p25 = df[ensemble_cols].quantile(0.25, axis=1).round(3).tolist()
             p50 = df[ensemble_cols].quantile(0.50, axis=1).round(3).tolist()
             p75 = df[ensemble_cols].quantile(0.75, axis=1).round(3).tolist()
+            p95 = df[ensemble_cols].quantile(0.95, axis=1).round(3).tolist()
 
             formatted_date = datetime.strptime(final_date_folder, "%Y%m%d").strftime("%Y-%m-%d")
             dates_list = df[time_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
 
-            # 7. Probability Computation (Updated Naming & Logic)
-            pb_dates = []
-            pb_values = []
-            
-            # Updated generic naming convention: exceedence_YYYYMMDD_dalia.csv
-            remote_pb_filename = f"exceedence_{final_date_folder}_dalia.csv"
-            remote_pb_file = f"{remote_base_dir}{final_date_folder}/{remote_pb_filename}"
+            # 7. Probability (data_pb)
+            pb_dates, pb_values = [], []
+            pb_name = f"exceedence_{final_date_folder}_dalia.csv"
+            # Use the root where the main file was found
+            remote_pb_file = f"{current_active_root}{final_date_folder}/{pb_name}"
 
-            self.stdout.write(f"--> Checking for exceedence file: {remote_pb_filename}")
             try:
-                sftp.stat(remote_pb_file)
                 sftp.get(remote_pb_file, temp_pb_csv)
                 df_pb = pd.read_csv(temp_pb_csv)
-                
                 if 'ex_pr' in df_pb.columns:
                     pb_values = df_pb['ex_pr'].tolist()
-                    
-                    # Pull dates from PB file if available
-                    if 'date' in df_pb.columns:
-                        pb_dates = pd.to_datetime(df_pb['date']).dt.strftime('%Y-%m-%d').tolist()
-                    else:
-                        # Fallback: align with main dates list (YYYY-MM-DD)
-                        pb_dates = [d.split(' ')[0] for d in dates_list[:len(pb_values)]]
-                    
-                    self.stdout.write(self.style.SUCCESS(f"--> Probability data loaded."))
-                else:
-                    self.stdout.write(self.style.WARNING("--> Column 'ex_pr' missing in PB file."))
-            except IOError:
-                self.stdout.write(self.style.WARNING(f"--> File {remote_pb_filename} not found."))
-            except Exception as pb_err:
-                self.stdout.write(self.style.WARNING(f"--> PB Error: {pb_err}"))
+                    pb_dates = pd.to_datetime(df_pb['date']).dt.strftime('%Y-%m-%d').tolist() if 'date' in df_pb.columns else [d.split(' ')[0] for d in dates_list[:len(pb_values)]]
+            except:
+                self.stdout.write(self.style.WARNING("--> Probability file not found in selected root."))
 
-            sftp.close()
-            ssh.close()
+            sftp.close(); ssh.close()
 
-            # 8. Final JSON Output
+            # 8. Save JSON
             output_data = {
-                "code": "success",
-                "message": "Data has been fetched!",
+                "code": "success", "message": f"Fetched from {current_active_root}",
                 "metadata": {
-                    "station_id": 'SW291.5R',
-                    "basin_name": "Teesta River (Dalia)",
-                    "forecast_date": formatted_date,
-                    "run_datetime": run_datetime,
-                    "dc_unit": "m³/s",
-                    "dl": "1850",
-                    "pb_unit": "%",
-                    "forecast_type": "experimental"
+                    "station_id": 'SW291.5R', "basin_name": "Teesta River (Dalia)",
+                    "forecast_date": formatted_date, "run_datetime": run_datetime,
+                    "dc_unit": "m³/s", "dl": "1850", "pb_unit": "%", "forecast_type": "experimental"
                 },
                 "data": {
-                    "date": dates_list,
-                    "25%": p25,
-                    "50%": p50,
-                    "75%": p75
+                    "date": dates_list, "5%": p05, "25%": p25, "50%": p50, "75%": p75, "95%": p95
                 },
-                "data_pb": {
-                    "date": pb_dates,
-                    "pb": pb_values
-                }
+                "data_pb": {"date": pb_dates, "pb": pb_values}
             }
 
             with open(local_json_path, 'w') as f:
@@ -160,8 +146,6 @@ class Command(BaseCommand):
 
         except Exception as e:
             self.stdout.write(self.style.ERROR(f"FATAL ERROR: {str(e)}"))
-        
         finally:
-            for f_path in [temp_csv, temp_pb_csv]:
-                if os.path.exists(f_path):
-                    os.remove(f_path)
+            for p in [temp_csv, temp_pb_csv]:
+                if os.path.exists(p): os.remove(p)

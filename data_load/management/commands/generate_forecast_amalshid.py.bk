@@ -110,19 +110,31 @@ class Command(BaseCommand):
             self.stdout.write(f"--> Processed {len(dates_list)} forecast time steps.")
 
             # 7. Probability Computation (data_pb)
+            # UPDATED: File naming convention and parsing logic
             pb_dates = []
             pb_values = []
-            remote_pb_file = f"{remote_base_dir}{final_date_folder}/exceedence{final_date_folder}.csv"
+            # Updated pattern: exceedence_YYYYMMDD_amalshid_s.csv
+            remote_pb_filename = f"exceedence_{final_date_folder}_amalshid_s.csv"
+            remote_pb_file = f"{remote_base_dir}{final_date_folder}/{remote_pb_filename}"
 
-            self.stdout.write(f"--> Checking for exceedence file: exceedence{final_date_folder}.csv")
+            self.stdout.write(f"--> Checking for exceedence file: {remote_pb_filename}")
             try:
                 sftp.get(remote_pb_file, temp_pb_csv)
                 self.stdout.write("--> Exceedence file downloaded. Parsing...")
                 df_pb = pd.read_csv(temp_pb_csv)
                 
+                # Check for required columns: 'ex_pr' and 'date'
                 if 'ex_pr' in df_pb.columns:
                     pb_values = df_pb['ex_pr'].tolist()
-                    pb_dates = dates_list[:len(pb_values)]
+                    
+                    if 'date' in df_pb.columns:
+                        # Extract dates directly from the exceedence CSV
+                        pb_dates = pd.to_datetime(df_pb['date']).dt.strftime('%Y-%m-%d').tolist()
+                    else:
+                        # Fallback if 'date' column is missing: align with main dates list
+                        pb_dates = dates_list[:len(pb_values)]
+                        self.stdout.write(self.style.WARNING("--> Column 'date' missing in exceedence file. Falling back to main date sequence."))
+                    
                     self.stdout.write(self.style.SUCCESS(f"--> Probability data loaded ({len(pb_values)} entries)."))
                 else:
                     self.stdout.write(self.style.WARNING("--> Column 'ex_pr' missing in exceedence file. Skipping pb data."))

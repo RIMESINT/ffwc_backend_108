@@ -1,114 +1,167 @@
+# -*- coding: utf-8 -*-
 import os
 import json
 import pandas as pd
 import paramiko
 import re
+import warnings
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from django.core.management.base import BaseCommand
 
+# Suppress pandas performance warnings
+warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
+
 class Command(BaseCommand):
-    help = 'Fetch latest Cumilla forecast and exceedence probability'
+    help = 'Fetch Cumilla ensemble forecast with nested fallback (New Path -> Old Path)'
 
     def handle(self, *args, **options):
-        run_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        # 1. Setup
+        now = datetime.now()
+        run_datetime = now.strftime('%Y-%m-%d %H:%M:%S')
+        self.stdout.write(f"[{run_datetime}] Starting Cumilla forecast update...")
         
         REMOTE_HOST = '203.156.108.111'
         REMOTE_USER = 'mmb'
         REMOTE_PASS = 'mmb!@#$'
+
+        # Directory Constants
+        NEW_ROOT = '/home/mmb/Tank_All_Output/'
+        OLD_ROOT = '/home/mmb/tank-cumilla-auto/outputs_corrected/csv/'
+        TARGET_FILE = 'all_en_cumilla_corr.csv'
         
-        # Verify if this is 'outputs_corrected' or 'output_corrected' on server
-        remote_base_dir = '/home/mmb/tank-cumilla-auto/outputs_corrected/csv/'
-        
+        # Local paths
         base_assets = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast'
         os.makedirs(base_assets, exist_ok=True)
         local_json_path = os.path.join(base_assets, 'latest_cumilla_forecast.json')
 
-        fd1, temp_csv_path = tempfile.mkstemp(suffix='_main.csv')
-        fd2, temp_pb_csv_path = tempfile.mkstemp(suffix='_pb.csv')
-        os.close(fd1)
-        os.close(fd2)
+        # Use tempfile to manage local processing
+        fd1, temp_csv = tempfile.mkstemp(suffix='_cumilla_main.csv')
+        fd2, temp_pb_csv = tempfile.mkstemp(suffix='_cumilla_pb.csv')
+        os.close(fd1); os.close(fd2)
 
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(REMOTE_HOST, username=REMOTE_USER, password=REMOTE_PASS, timeout=30)
+            self.stdout.write(self.style.SUCCESS("--> SSH Connection established."))
             sftp = ssh.open_sftp()
 
-            # 1. Detect the Latest Folder
-            self.stdout.write(f"--> Scanning: {remote_base_dir}")
-            all_entries = sftp.listdir(remote_base_dir)
-            date_folders = sorted([f for f in all_entries if re.match(r'^\d{8}$', f)], reverse=True)
-            
-            if not date_folders:
-                raise Exception(f"No valid date folders found in {remote_base_dir}")
-            
-            latest_date = date_folders[0]
-            remote_folder_path = f'{remote_base_dir}{latest_date}/'
-            self.stdout.write(f"--> Target Folder: {remote_folder_path}")
+            remote_file_path = None
+            final_date_folder = None
+            current_active_root = NEW_ROOT
 
-            # 2. Process Main Forecast Data
-            remote_forecast_file = f'{remote_folder_path}all_en_cumilla_corr.csv'
-            self.stdout.write(f"--> Attempting Main CSV: {remote_forecast_file}")
+            # --- STEP 1: Try NEW Directory Structure (Today/Yesterday) ---
+            today_str = now.strftime('%Y%m%d')
+            yesterday_str = (now - timedelta(days=1)).strftime('%Y%m%d')
             
-            # This is often where Errno 2 happens if the file name is slightly different
-            sftp.get(remote_forecast_file, temp_csv_path)
-            
-            df = pd.read_csv(temp_csv_path)
-            df['Time'] = pd.to_datetime(df['Time']).dt.tz_localize(None)
-            forecast_start_threshold = pd.to_datetime(latest_date, format='%Y%m%d')
-            df = df[df['Time'] >= forecast_start_threshold].copy()
-            
+            for folder in [today_str, yesterday_str]:
+                candidate = f"{NEW_ROOT}{folder}/{TARGET_FILE}"
+                try:
+                    sftp.stat(candidate)
+                    remote_file_path = candidate
+                    final_date_folder = folder
+                    self.stdout.write(self.style.SUCCESS(f"--> Found in NEW directory: {folder}"))
+                    break
+                except IOError:
+                    continue
+
+            # --- STEP 2: Try OLD Directory Structure (Fallback Scan) ---
+            if not remote_file_path:
+                self.stdout.write(self.style.WARNING("--> Not found in NEW root. Checking OLD directory..."))
+                try:
+                    all_entries = sftp.listdir(OLD_ROOT)
+                    # Filter for YYYYMMDD folders and sort descending
+                    date_folders = sorted([f for f in all_entries if re.match(r'^\d{8}$', f)], reverse=True)
+                    
+                    for folder in date_folders[:3]: # Check 3 most recent
+                        candidate = f"{OLD_ROOT}{folder}/{TARGET_FILE}"
+                        try:
+                            sftp.stat(candidate)
+                            remote_file_path = candidate
+                            final_date_folder = folder
+                            current_active_root = OLD_ROOT
+                            self.stdout.write(self.style.SUCCESS(f"--> Found in OLD directory fallback: {folder}"))
+                            break
+                        except IOError:
+                            continue
+                except Exception as e:
+                    self.stdout.write(self.style.ERROR(f"--> Could not access OLD directory: {e}"))
+
+            if not remote_file_path:
+                raise Exception("Data not found in either NEW or OLD Cumilla directory structures.")
+
+            # 4. Download & Process
+            sftp.get(remote_file_path, temp_csv)
+            df = pd.read_csv(temp_csv)
+            time_col = 'Time' if 'Time' in df.columns else 'Date'
+            df[time_col] = pd.to_datetime(df[time_col]).dt.tz_localize(None)
+
+            # Filter data to start from the forecast folder date
+            f_start = pd.to_datetime(final_date_folder, format='%Y%m%d')
+            df = df[df[time_col] >= f_start].copy()
+
             ensemble_cols = [col for col in df.columns if col.startswith('EN#')]
+            
+            # Expanded Quantiles for Uncertainty Analysis
+            p05 = df[ensemble_cols].quantile(0.05, axis=1).round(3).tolist()
             p25 = df[ensemble_cols].quantile(0.25, axis=1).round(3).tolist()
             p50 = df[ensemble_cols].quantile(0.50, axis=1).round(3).tolist()
             p75 = df[ensemble_cols].quantile(0.75, axis=1).round(3).tolist()
-            time_list = df['Time'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
+            p95 = df[ensemble_cols].quantile(0.95, axis=1).round(3).tolist()
 
-            # 3. Process Probability Data
-            pb_dates = []
-            pb_values = []
-            remote_pb_filename = f'exceedence_{latest_date}_cumilla.csv'
-            remote_pb_file = f'{remote_folder_path}{remote_pb_filename}'
-            self.stdout.write(f"--> Attempting Probability CSV: {remote_pb_file}")
+            formatted_date = datetime.strptime(final_date_folder, "%Y%m%d").strftime("%Y-%m-%d")
+            dates_list = df[time_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
+
+            # 5. Probability (data_pb)
+            pb_dates, pb_values = [], []
+            pb_name = f"exceedence_{final_date_folder}_cumilla.csv"
+            # Ensure probability file is pulled from the same root as the main forecast
+            remote_pb_file = f"{current_active_root}{final_date_folder}/{pb_name}"
 
             try:
-                sftp.get(remote_pb_file, temp_pb_csv_path)
-                df_pb = pd.read_csv(temp_pb_csv_path)
+                sftp.get(remote_pb_file, temp_pb_csv)
+                df_pb = pd.read_csv(temp_pb_csv)
                 if 'ex_pr' in df_pb.columns:
                     pb_values = df_pb['ex_pr'].tolist()
-                    if 'date' in df_pb.columns:
-                        pb_dates = pd.to_datetime(df_pb['date']).dt.strftime('%Y-%m-%d').tolist()
-                    else:
-                        pb_dates = [d.split(' ')[0] for d in time_list[:len(pb_values)]]
-            except Exception as pb_error:
-                self.stdout.write(self.style.WARNING(f"--> PB File skipped: {pb_error}"))
+                    pb_dates = pd.to_datetime(df_pb['date']).dt.strftime('%Y-%m-%d').tolist() if 'date' in df_pb.columns else [d.split(' ')[0] for d in dates_list[:len(pb_values)]]
+            except:
+                self.stdout.write(self.style.WARNING("--> Probability file not found in active root."))
 
-            sftp.close()
-            ssh.close()
+            sftp.close(); ssh.close()
 
-            # 4. Save JSON
-            formatted_date = datetime.strptime(latest_date, "%Y%m%d").strftime("%Y-%m-%d")
+            # 6. Construct JSON
             output_data = {
-                "code": "success", "message": "Data fetched!",
+                "code": "success", 
+                "message": f"Fetched from {current_active_root}",
                 "metadata": {
-                    "station_id": 'SW110', "basin_name": "Gumti River (Cumilla)",
-                    "forecast_date": formatted_date, "run_datetime": run_datetime,
-                    "dc_unit": "m³/s", "dl": "290", "pb_unit": "%", "forecast_type": "experimental"
+                    "station_id": 'SW110', 
+                    "basin_name": "Gumti River (Cumilla)",
+                    "forecast_date": formatted_date, 
+                    "run_datetime": run_datetime,
+                    "dc_unit": "m³/s", 
+                    "dl": "290", 
+                    "pb_unit": "%", 
+                    "forecast_type": "experimental"
                 },
-                "data": {"date": time_list, "25%": p25, "50%": p50, "75%": p75},
+                "data": {
+                    "date": dates_list, 
+                    "5%": p05, 
+                    "25%": p25, 
+                    "50%": p50, 
+                    "75%": p75, 
+                    "95%": p95
+                },
                 "data_pb": {"date": pb_dates, "pb": pb_values}
             }
 
             with open(local_json_path, 'w') as f:
                 json.dump(output_data, f, indent=2)
 
-            self.stdout.write(self.style.SUCCESS(f'Successfully updated {local_json_path}'))
+            self.stdout.write(self.style.SUCCESS(f"DONE: Cumilla updated for {formatted_date}."))
 
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f'Critical Error: {str(e)}'))
-
+            self.stdout.write(self.style.ERROR(f"FATAL ERROR for Cumilla: {str(e)}"))
         finally:
-            for path in [temp_csv_path, temp_pb_csv_path]:
-                if os.path.exists(path):
-                    os.remove(path)
+            for p in [temp_csv, temp_pb_csv]:
+                if os.path.exists(p): os.remove(p)
