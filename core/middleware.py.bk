@@ -1,0 +1,38 @@
+from django.http import HttpResponseForbidden
+from urllib.parse import urlparse
+
+class DomainLockedMiddleware:
+    def __init__(self, get_response):
+        self.get_response = get_response
+        # This is your private internal key
+        self.SECRET_VAL = "FFWC-Project-2026-Secure-V1"
+
+    def __call__(self, request):
+        # 1. Exempt paths (Admin, Static, Home)
+        # exempt = ['/admin/', '/static/', '/media/', '/api/token/', '/user-auth/']
+        exempt = ['/admin/', '/static/', '/assets/', '/api/token/', '/user-auth/']
+        
+        path = request.path_info
+        if any(path.startswith(p) for p in exempt) or path == '/':
+            return self.get_response(request)
+
+        # 2. Check for the Secret Header
+        app_key = request.headers.get('x-ffwc-internal-key')
+        if app_key != self.SECRET_VAL:
+            return HttpResponseForbidden("Access Denied: Invalid Security Header")
+
+        # 3. Check Referer (Ensures the request comes from ffwc.gov.bd)
+        referer = request.headers.get('Referer')
+        if referer:
+            domain = urlparse(referer).netloc
+            # allowed_domains = ['ffwc.gov.bd', 'www.ffwc.gov.bd', 'localhost:4200']
+            # inside core/middleware.py
+            allowed_domains = ['ffwc.gov.bd', 'www.ffwc.gov.bd', 'localhost:4200', '127.0.0.1:4200']
+            
+            if domain not in allowed_domains:
+                return HttpResponseForbidden("Access Denied: Unauthorized Origin")
+        else:
+            # Blocks direct browser URL access (no referer)
+            return HttpResponseForbidden("Access Denied: Direct API access is restricted")
+
+        return self.get_response(request)

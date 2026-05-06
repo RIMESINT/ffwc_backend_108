@@ -14,17 +14,53 @@ ROOT_URLCONF = 'ffwc_django_project.urls'
 WSGI_APPLICATION = 'ffwc_django_project.wsgi.application'
 
 
-CORS_ALLOW_ALL_ORIGINS = True
-ALLOWED_HOSTS = ['*']
-CORS_ORIGIN_ALLOW_ALL = True
-CORS_ALLOW_METHODS = ('*',)  # Allow all HTTP methods
-CORS_ALLOW_HEADERS = ('*',)  # Allow all headers
+
+# ALLOWED_HOSTS = ['*']
+# ALLOWED_HOSTS = ['api.ffwc.gov.bd', 'ffwc.gov.bd','localhost']
+ALLOWED_HOSTS = ['api.ffwc.gov.bd', 'ffwc.gov.bd', 'localhost', '127.0.0.1','0.0.0.0']
+
+# CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_ALL_ORIGINS = False
+
+# CORS_ORIGIN_ALLOW_ALL = True
+CORS_ORIGIN_ALLOW_ALL = False
+CORS_ALLOWED_ORIGINS = ["https://ffwc.gov.bd","http://localhost:4200","http://127.0.0.1:4200"]
+# settings.py
+CSRF_TRUSTED_ORIGINS = [
+    "https://ffwc.gov.bd",
+    "http://localhost:4200",
+    "http://127.0.0.1:4200"
+]
+
+# CORS_ALLOW_METHODS = ('*',)  
+
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
+
+# Allow the custom header to pass through the browser
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+    "x-ffwc-internal-key", 
+]
+
 CORS_ALLOW_CREDENTIALS = True  # Allow credentials in cross-origin requests
 
-CSRF_TRUSTED_ORIGINS = [
-    'https://api3.ffwc.gov.bd',
-    'https://ffwc.gov.bd'
-]
+# CSRF_TRUSTED_ORIGINS = ['https://api3.ffwc.gov.bd','https://ffwc.gov.bd']
+CSRF_TRUSTED_ORIGINS = ['https://ffwc.gov.bd']
 
 
 # Application definition
@@ -46,6 +82,7 @@ INSTALLED_APPS = [
     'celery_progress',
 
     # Defined Apps
+    'core',
     'data_load',
     'indian_stations',
     'userauth',
@@ -79,6 +116,10 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.BrowsableAPIRenderer',
     ),
     
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/minute',
+    },
+
     'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
     
     'TITLE': 'FFWC API VIEWS'
@@ -176,14 +217,21 @@ SIMPLE_JWT = {
 
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # Added for CORS handling
+
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    
+    'corsheaders.middleware.CorsMiddleware', 
+
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
+
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+
+    'core.middleware.DomainLockedMiddleware'
+
 ]
 
 
