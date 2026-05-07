@@ -8,6 +8,20 @@ class DomainLockedMiddleware:
         self.SECRET_VAL = "FFWC-Project-2026-Secure-V1"
 
     def __call__(self, request):
+
+        x_forwarded_for = request.META.get('HTTP_X_FORWARDED_FOR')
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(',')[0]
+        else:
+            ip = request.META.get('REMOTE_ADDR')
+
+        # Trust Localhost and Server IP
+        trusted_ips = ['127.0.0.1', 'localhost', 'YOUR_OFFICE_IP']
+        
+        if ip in trusted_ips:
+            return self.get_response(request)
+
+        # assets/uploads    
         # 1. Exempt paths (Admin, Static, Assets/Media, Auth)
         # Added '/assets/' to ensure .tif and other media files load
         exempt = ['/admin/', '/static/', '/assets/', '/api/token/', '/user-auth/','/celery-progress/']

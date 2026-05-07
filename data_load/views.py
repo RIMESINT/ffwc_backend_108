@@ -1350,20 +1350,18 @@ class RecentObservedWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
         return JsonResponse(observed_values_dict, safe=False)
 
 
-
 class WaterLevelByStationAndYearView(View):
     def get(self, request, **kwargs):
         station_id_str = kwargs['st_id']
         year = int(kwargs['year'])
         
-        # The logic is simplified as both conditions
-        # for 'current_year' and 'other years' are identical.
+  
         queryset = models.WaterLevelObservation.objects.filter(
-            station_id__station_id=station_id_str, # Using ForeignKey to filter by 'station_id'
+            station_id__station_id=station_id_str, 
             observation_date__year=year
         ).order_by('observation_date')
         
-        queryset = queryset.filter(observation_date__month__range=[5, 10])
+        queryset = queryset.filter(observation_date__month__range=[1, 13])
         
         waterlevel_data = {
             str(year): [
