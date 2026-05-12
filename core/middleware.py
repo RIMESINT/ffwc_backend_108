@@ -16,7 +16,8 @@ class DomainLockedMiddleware:
             ip = request.META.get('REMOTE_ADDR')
 
         # Trust Localhost and Server IP
-        trusted_ips = ['127.0.0.1', 'localhost', 'YOUR_OFFICE_IP']
+        # trusted_ips = ['127.0.0.1', 'localhost', 'YOUR_OFFICE_IP']
+        trusted_ips = ['127.0.0.1', 'localhost']
         
         if ip in trusted_ips:
             return self.get_response(request)
@@ -24,7 +25,7 @@ class DomainLockedMiddleware:
         # assets/uploads    
         # 1. Exempt paths (Admin, Static, Assets/Media, Auth)
         # Added '/assets/' to ensure .tif and other media files load
-        exempt = ['/admin/', '/static/', '/assets/', '/api/token/', '/user-auth/','/celery-progress/']
+        exempt = ['/admin/', '/static/', '/assets/', '/api/token/', '/user-auth/','/celery-progress/','/data_load/proxy/']
         
         path = request.path_info
         if any(path.startswith(p) for p in exempt) or path == '/':

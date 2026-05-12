@@ -5182,3 +5182,72 @@ def get_forecast_metadata(request):
             "last_updated": full_data['metadata']['run_datetime']
         })
     return JsonResponse({"code": "error", "message": "No data available."}, status=404)
+
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ProxyRequestView(View):
+    # Allowed methods for the proxy
+    ALLOWED_METHODS = ('GET', 'POST', 'PUT', 'PATCH', 'HEAD', 'OPTIONS')
+    # Use the same key as your middleware
+    SECRET_VAL = "FFWC-Project-2026-Secure-V1"
+
+    def post(self, request, *args, **kwargs):
+        # 1. Security Check: Block unauthorized proxy use
+        app_key = request.headers.get('x-ffwc-internal-key')
+        if app_key != self.SECRET_VAL:
+            return JsonResponse({'error': 'Unauthorized Proxy Access'}, status=403)
+
+        # 2. Parse the Incoming JSON
+        try:
+            payload = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({'error': 'Invalid JSON body'}, status=400)
+
+        url = payload.get('url')
+        if not url:
+            return JsonResponse({'error': 'Target url is required'}, status=400)
+
+        method = payload.get('method', 'POST').upper()
+        if method not in self.ALLOWED_METHODS:
+            return JsonResponse({'error': f'Method {method} not allowed'}, status=405)
+
+        # 3. Prepare the Outbound Request Configuration
+        headers = payload.get('headers', {})
+        body = payload.get('body', {})
+        params = payload.get('params', {})
+        timeout = payload.get('timeout', 30)
+
+        # Build the arguments for the requests library
+        request_kwargs = {
+            'url': url,
+            'headers': headers,
+            'params': params,
+            'verify': False, # Avoid SSL issues with internal gov certificates
+            'timeout': timeout,
+        }
+
+        # If it's a data-carrying request, send as JSON
+        if method not in ('GET', 'HEAD', 'OPTIONS'):
+            request_kwargs['json'] = body
+
+        # 4. Perform the request and return the result
+        try:
+            response = requests.request(method=method, **request_kwargs)
+            
+            # Check if response is JSON
+            try:
+                return JsonResponse(response.json(), safe=False, status=response.status_code)
+            except ValueError:
+                # Fallback to raw text (HTML, XML, or Plain Text)
+                return HttpResponse(
+                    content=response.text,
+                    status=response.status_code,
+                    content_type=response.headers.get('Content-Type', 'text/plain')
+                )
+
+        except requests.exceptions.Timeout:
+            return JsonResponse({'error': 'Upstream API (BWDB) timed out'}, status=504)
+        except requests.exceptions.RequestException as e:
+            return JsonResponse({'error': f'Proxy Connection Error: {str(e)}'}, status=502)

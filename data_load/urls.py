@@ -1,5 +1,7 @@
 from django.urls import path, include,re_path
 from rest_framework.routers import DefaultRouter
+from .views import ProxyRequestView
+
 from . import views as views
 
 from indian_stations import views as transView
@@ -320,6 +322,9 @@ urlpatterns = [
     path('basin-wise-forecast/parshuram/latest/', views.get_latest_parshuram_forecast, name='parshuram_latest'),
     
     path('basin-wise-forecast/dalia/latest/', views.get_latest_dalia_forecast, name='dalia_latest'),
+    
+    path('proxy/', ProxyRequestView.as_view(), name='proxy'),
+
 
 
     # path('json/save/', views.save_json_file, name='save_json_file'),
