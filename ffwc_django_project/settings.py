@@ -3,6 +3,7 @@ import os,json
 from datetime import timedelta
 import pymysql
 pymysql.install_as_MySQLdb()
+from corsheaders.defaults import default_headers
 
 
 DEBUG = True
@@ -14,53 +15,64 @@ ROOT_URLCONF = 'ffwc_django_project.urls'
 WSGI_APPLICATION = 'ffwc_django_project.wsgi.application'
 
 
+ALLOWED_HOSTS = [
+    'api.ffwc.gov.bd', 
+    'ffwc.gov.bd', 
+    
+    'nlas.dls.gov.bd',
+    
+    
+    'localhost', 
+    '127.0.0.1',
+    '0.0.0.0',
+    
+    ]
 
-# ALLOWED_HOSTS = ['*']
-# ALLOWED_HOSTS = ['api.ffwc.gov.bd', 'ffwc.gov.bd','localhost']
-ALLOWED_HOSTS = ['api.ffwc.gov.bd', 'ffwc.gov.bd', 'localhost', '127.0.0.1','0.0.0.0']
 
-# CORS_ALLOW_ALL_ORIGINS = True
 CORS_ALLOW_ALL_ORIGINS = False
 
-# CORS_ORIGIN_ALLOW_ALL = True
 CORS_ORIGIN_ALLOW_ALL = False
-CORS_ALLOWED_ORIGINS = ["https://ffwc.gov.bd","http://localhost:4200","http://127.0.0.1:4200"]
-# settings.py
+
+CORS_ALLOWED_ORIGINS = [
+    "https://ffwc.gov.bd",
+    "https://www.ffwc.gov.bd",
+    "https://ffwc.bwdb.gov.bd",
+    
+    "https://nlas.dls.gov.bd",
+    "https://www.nlas.dls.gov.bd",
+    
+    "http://localhost:4200",
+    "http://127.0.0.1:4200"
+    ]
+
 CSRF_TRUSTED_ORIGINS = [
     "https://ffwc.gov.bd",
+    "https://www.ffwc.gov.bd",
+    
+    "https://nlas.dls.gov.bd",
+    "https://www.nlas.dls.gov.bd",
+    
     "http://localhost:4200",
     "http://127.0.0.1:4200"
 ]
 
-# CORS_ALLOW_METHODS = ('*',)  
+CORS_ALLOW_METHODS = ('*',)  
 
-CORS_ALLOW_METHODS = [
-    "DELETE",
-    "GET",
-    "OPTIONS",
-    "PATCH",
-    "POST",
-    "PUT",
-]
 
-# Allow the custom header to pass through the browser
-CORS_ALLOW_HEADERS = [
-    "accept",
-    "accept-encoding",
-    "authorization",
-    "content-type",
-    "dnt",
-    "origin",
-    "user-agent",
-    "x-csrftoken",
-    "x-requested-with",
-    "x-ffwc-internal-key", 
-]
+CORS_ALLOW_HEADERS = ('*',)
 
 CORS_ALLOW_CREDENTIALS = True  # Allow credentials in cross-origin requests
+X_FRAME_OPTIONS = 'ALLOWALL'
 
-# CSRF_TRUSTED_ORIGINS = ['https://api3.ffwc.gov.bd','https://ffwc.gov.bd']
-CSRF_TRUSTED_ORIGINS = ['https://ffwc.gov.bd']
+XS_SHARING_ALLOWED_METHODS = ['POST', 'GET', 'OPTIONS', 'PUT', 'DELETE']
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+SECURE_SSL_REDIRECT = True 
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+
+
 
 
 # Application definition
