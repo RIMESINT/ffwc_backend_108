@@ -339,7 +339,7 @@ def process_observations_csv(self, csv_data_string, timezone_name):
 def import_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, station_name):
     """
     Celery task to import water level forecast data from a single DataFrame.
-    Performs bulk upsert operations, replacing old data for same dates.
+    Deletes old overlapping data for the same dates, then cleanly inserts new rows.
     """
     progress_recorder = ProgressRecorder(self)
     inserted_count = 0
@@ -348,42 +348,49 @@ def import_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, 
     total_processed_rows = 0
 
     try:
-        # --- (Existing code for data parsing and preprocessing) ---
+        # --- Pre-processing & Formats Setup ---
         update_last_update_date()
         logger.info(f"Starting import_forecast_files task for station: {station_name}")
         progress_recorder.set_progress(5, 100, description="Converting data to DataFrame")
+        
         forecastDF = pd.DataFrame(forecastDF_dict)
         pattern_one = r"(\d{1,2})/(\d{1,2})/(\d{2,4})\s+(\d{1,2}):(\d{2})"
         pattern_two = r"\b(20[0-2][0-9])[-/](0[1-9]|1[0-2])[-/](0[1-9]|[0-3][0-9])\s+([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\b"
+        
         progress_recorder.set_progress(10, 100, description=f"Processing station '{station_name}'...")
         station_id_for_df = stationNameToIdDict.get(station_name)
+        
         if station_id_for_df is None:
             error_msg = f"Station '{station_name}' not found..."
             logger.error(error_msg)
             progress_recorder.set_progress(100, 100, description=error_msg)
-            self.update_state(state=states.FAILURE, meta={'message': error_msg})
-            raise Ignore()
+            # Avoid using bare update_state here to prevent serialization issues
+            return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "state": states.SUCCESS, "message": error_msg}
+            
         forecastDF['st_id'] = station_id_for_df
         forecast_columns = [col for col in forecastDF.columns.tolist() if col.endswith('-for')]
+        
         if not forecast_columns:
             error_msg = f"No forecast columns found..."
             logger.error(error_msg)
             progress_recorder.set_progress(100, 100, description=error_msg)
-            self.update_state(state=states.FAILURE, meta={'message': error_msg})
-            raise Ignore()
+            return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "state": states.SUCCESS, "message": error_msg}
+            
         stationHeader = forecast_columns[0]
         forecastDF = forecastDF[['YYYY-MM-DD HH:MM:SS', stationHeader, 'st_id']].copy()
         forecastDF.rename(columns={'YYYY-MM-DD HH:MM:SS': 'forecast_date', stationHeader: 'water_level'}, inplace=True)
         forecastDF = forecastDF[forecastDF['water_level'] != -9999.0].dropna(subset=['water_level', 'forecast_date'])
+        
         total_rows_after_filter = len(forecastDF)
         if total_rows_after_filter == 0:
             logger.warning(f"No valid data to process...")
             progress_recorder.set_progress(100, 100, description="No valid data to process")
-            self.update_state(state=states.SUCCESS, meta={'message': f"No valid data for station {station_name}"})
-            return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "state": states.SUCCESS}
+            return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "state": states.SUCCESS, "message": f"No valid data for station {station_name}"}
+            
         forecastDF.reset_index(drop=True, inplace=True)
         parsed_forecast_data = []
         tz = pytz.timezone(settings.TIME_ZONE)
+        
         for index, row in forecastDF.iterrows():
             dateTimeString = str(row['forecast_date']).strip()
             try:
@@ -413,30 +420,42 @@ def import_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, 
                 logger.warning(f"Date/value parsing error at row {index} for {station_name}: {dateTimeString}, error: {str(e)}")
                 skipped_count += 1
                 continue
-            progress_recorder.set_progress(
-                20 + int((index + 1) * 20 / total_rows_after_filter),
-                100,
-                description=f"Parsed {index + 1}/{total_rows_after_filter} dates for {station_name}"
-            )
+                
+            if index % 10 == 0:
+                progress_recorder.set_progress(
+                    20 + int((index + 1) * 20 / total_rows_after_filter),
+                    100,
+                    description=f"Parsed {index + 1}/{total_rows_after_filter} dates for {station_name}"
+                )
+                
         if not parsed_forecast_data:
             logger.warning(f"No valid forecast data to process...")
             progress_recorder.set_progress(100, 100, description="No valid forecast data to process")
-            self.update_state(state=states.SUCCESS, meta={'message': f"No valid forecast data for {station_name}"})
-            return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "state": states.SUCCESS}
+            return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "state": states.SUCCESS, "message": f"No valid forecast data for {station_name}"}
+            
         total_processed_rows = len(parsed_forecast_data)
 
-        # --- Phase 3: Bulk Upsert into database (FINAL LOGIC) ---
+        # --- Phase 3: Automated Delete-then-Insert ---
         progress_recorder.set_progress(40, 100, description=f"Performing database operations for {station_name}...")
         
-        # We need a single, isolated transaction to avoid race conditions
         with transaction.atomic():
-
-
             station_ids_to_fetch = {data['station_id_val'] for data in parsed_forecast_data}
             station_objects_map = {s.station_id: s for s in Station.objects.filter(station_id__in=station_ids_to_fetch)}
-    
+            
+            # Extract all dates present in the incoming CSV file
+            incoming_dates = [data['forecast_date'] for data in parsed_forecast_data]
+            
+            if incoming_dates:
+                # 1. DELETE: Clean out any existing duplicate records first
+                deleted_info = WaterLevelForecast.objects.filter(
+                    station_id__station_id__in=station_ids_to_fetch,
+                    forecast_date__in=incoming_dates
+                ).delete()
+                logger.info(f"Cleared existing overlapping forecast records for {station_name}. Details: {deleted_info}")
+
+            # 2. Map parsed data to model objects
             forecast_instances = []
-            for i, fc_data in enumerate(parsed_forecast_data):
+            for fc_data in parsed_forecast_data:
                 station_obj = station_objects_map.get(fc_data['station_id_val'])
                 if not station_obj:
                     logger.warning(f"Station with ID {fc_data['station_id_val']} not found for forecast. Skipping.")
@@ -450,40 +469,20 @@ def import_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, 
                     )
                 )
 
+            # 3. INSERT: Safely insert all instances freshly
             if forecast_instances:
-                # First, try to insert all records, ignoring conflicts
-                WaterLevelForecast.objects.bulk_create(forecast_instances, ignore_conflicts=True)
-
-                # Now, identify and update the records that already existed
-                keys_to_update = {(f.station_id.station_id, f.forecast_date): f.water_level for f in forecast_instances}
-                
-                # Fetch only the objects that need an update
-                existing_objects_to_update = WaterLevelForecast.objects.filter(
-                    station_id__station_id__in=[f.station_id.station_id for f in forecast_instances],
-                    forecast_date__in=[f.forecast_date for f in forecast_instances]
-                ).select_related('station_id')
-
-                records_to_bulk_update = []
-                for obj in existing_objects_to_update:
-                    key = (obj.station_id.station_id, obj.forecast_date)
-                    new_water_level = keys_to_update.get(key)
-                    if new_water_level is not None and obj.water_level != new_water_level:
-                        obj.water_level = new_water_level
-                        records_to_bulk_update.append(obj)
-                
-                if records_to_bulk_update:
-                    updated_count = WaterLevelForecast.objects.bulk_update(records_to_bulk_update, fields=['water_level'])
-                inserted_count = len(forecast_instances) - len(records_to_bulk_update)
-
+                WaterLevelForecast.objects.bulk_create(forecast_instances)
+                inserted_count = len(forecast_instances)
 
             progress_recorder.set_progress(90, 100, description=f"Database operations complete for {station_name}.")
 
         result_message = (
-            f"Processed {station_name}: {inserted_count} inserted, "
-            f"{updated_count} updated, {skipped_count} skipped."
+            f"Processed {station_name}: {inserted_count} rows fresh inserted "
+            f"after clearing historical overlaps. {skipped_count} skipped."
         )
         logger.info(result_message)
         progress_recorder.set_progress(100, 100, description=result_message)
+        
         self.update_state(
             state=states.SUCCESS,
             meta={
@@ -505,7 +504,7 @@ def import_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, 
     except Ignore:
         logger.warning(f"Task for {station_name} ignored based on task logic.")
         self.update_state(state=states.REVOKED, meta={'message': f"Task for {station_name} ignored."})
-        return None
+        return {"state": states.REVOKED, "message": "Task ignored."}
 
     except Exception as e:
         import traceback
@@ -513,9 +512,218 @@ def import_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, 
         error_message_for_log = f"Task for {station_name} failed: {e}\n{error_traceback}"
         logger.error(error_message_for_log)
         progress_recorder.set_progress(100, 100, description=f"Error: {e}")
-        self.update_state(state=states.FAILURE, meta={'message': str(e)})
+        
+        # Safe circuit breaker value string to avoid internal backend serialization error
+        self.update_state(
+            state='FAILED', 
+            meta={
+                'status': 'FAILED',
+                'message': f"Critical background error: {str(e)}",
+                'percent': 100
+            }
+        )
+        return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "total_rows": 0, "state": "FAILED", "message": str(e)}
+    
+# @shared_task(bind=True)
+# def import_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, station_name):
+#     """
+#     Celery task to import water level forecast data from a single DataFrame.
+#     Performs bulk upsert operations, replacing old data for same dates.
+#     """
+#     progress_recorder = ProgressRecorder(self)
+#     inserted_count = 0
+#     updated_count = 0
+#     skipped_count = 0
+#     total_processed_rows = 0
 
-        return None
+#     try:
+#         # --- (Existing code for data parsing and preprocessing) ---
+#         update_last_update_date()
+#         logger.info(f"Starting import_forecast_files task for station: {station_name}")
+#         progress_recorder.set_progress(5, 100, description="Converting data to DataFrame")
+#         forecastDF = pd.DataFrame(forecastDF_dict)
+#         pattern_one = r"(\d{1,2})/(\d{1,2})/(\d{2,4})\s+(\d{1,2}):(\d{2})"
+#         pattern_two = r"\b(20[0-2][0-9])[-/](0[1-9]|1[0-2])[-/](0[1-9]|[0-3][0-9])\s+([0-1][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]\b"
+#         progress_recorder.set_progress(10, 100, description=f"Processing station '{station_name}'...")
+#         station_id_for_df = stationNameToIdDict.get(station_name)
+#         if station_id_for_df is None:
+#             error_msg = f"Station '{station_name}' not found..."
+#             logger.error(error_msg)
+#             progress_recorder.set_progress(100, 100, description=error_msg)
+#             self.update_state(state=states.FAILURE, meta={'message': error_msg})
+#             raise Ignore()
+#         forecastDF['st_id'] = station_id_for_df
+#         forecast_columns = [col for col in forecastDF.columns.tolist() if col.endswith('-for')]
+#         if not forecast_columns:
+#             error_msg = f"No forecast columns found..."
+#             logger.error(error_msg)
+#             progress_recorder.set_progress(100, 100, description=error_msg)
+#             self.update_state(state=states.FAILURE, meta={'message': error_msg})
+#             raise Ignore()
+#         stationHeader = forecast_columns[0]
+#         forecastDF = forecastDF[['YYYY-MM-DD HH:MM:SS', stationHeader, 'st_id']].copy()
+#         forecastDF.rename(columns={'YYYY-MM-DD HH:MM:SS': 'forecast_date', stationHeader: 'water_level'}, inplace=True)
+#         forecastDF = forecastDF[forecastDF['water_level'] != -9999.0].dropna(subset=['water_level', 'forecast_date'])
+#         total_rows_after_filter = len(forecastDF)
+#         if total_rows_after_filter == 0:
+#             logger.warning(f"No valid data to process...")
+#             progress_recorder.set_progress(100, 100, description="No valid data to process")
+#             self.update_state(state=states.SUCCESS, meta={'message': f"No valid data for station {station_name}"})
+#             return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "state": states.SUCCESS}
+#         forecastDF.reset_index(drop=True, inplace=True)
+#         parsed_forecast_data = []
+#         tz = pytz.timezone(settings.TIME_ZONE)
+#         for index, row in forecastDF.iterrows():
+#             dateTimeString = str(row['forecast_date']).strip()
+#             try:
+#                 dt_obj = None
+#                 match_one = re.match(pattern_one, dateTimeString)
+#                 match_two = re.match(pattern_two, dateTimeString)
+#                 if match_one:
+#                     day, month, year = map(int, match_one.groups()[:3])
+#                     hour, minute = map(int, match_one.groups()[3:])
+#                     if year < 100:
+#                         year += 2000 if year <= datetime.now().year % 100 + 10 else 1900
+#                     dt_obj = datetime(year, month, day, hour, minute)
+#                 elif match_two:
+#                     dt_obj = datetime.strptime(dateTimeString, '%Y-%m-%d %H:%M:%S')
+#                 else:
+#                     logger.warning(f"Invalid date format at row {index} for {station_name}: {dateTimeString}")
+#                     skipped_count += 1
+#                     continue
+#                 dt_obj_aware = tz.localize(dt_obj, is_dst=None)
+#                 normalized_dt = normalize_datetime(dt_obj_aware)
+#                 parsed_forecast_data.append({
+#                     'station_id_val': row['st_id'],
+#                     'forecast_date': normalized_dt,
+#                     'water_level': float(row['water_level'])
+#                 })
+#             except (ValueError, AttributeError) as e:
+#                 logger.warning(f"Date/value parsing error at row {index} for {station_name}: {dateTimeString}, error: {str(e)}")
+#                 skipped_count += 1
+#                 continue
+#             progress_recorder.set_progress(
+#                 20 + int((index + 1) * 20 / total_rows_after_filter),
+#                 100,
+#                 description=f"Parsed {index + 1}/{total_rows_after_filter} dates for {station_name}"
+#             )
+#         if not parsed_forecast_data:
+#             logger.warning(f"No valid forecast data to process...")
+#             progress_recorder.set_progress(100, 100, description="No valid forecast data to process")
+#             self.update_state(state=states.SUCCESS, meta={'message': f"No valid forecast data for {station_name}"})
+#             return {"inserted_rows": 0, "updated_rows": 0, "skipped_rows": 0, "state": states.SUCCESS}
+#         total_processed_rows = len(parsed_forecast_data)
+
+#         # --- Phase 3: Bulk Upsert into database (FINAL LOGIC) ---
+#         progress_recorder.set_progress(40, 100, description=f"Performing database operations for {station_name}...")
+        
+#         # We need a single, isolated transaction to avoid race conditions
+#         with transaction.atomic():
+
+#             station_ids_to_fetch = {data['station_id_val'] for data in parsed_forecast_data}
+#             station_objects_map = {s.station_id: s for s in Station.objects.filter(station_id__in=station_ids_to_fetch)}
+            
+#             # Automated Clean-up of existing records for the same station and forecast dates
+#             # incoming_dates = [data['forecast_date'] for data in parsed_forecast_data]
+#             # if incoming_dates:
+#             #     # Delete existing entries for this station that match incoming timestamps
+#             #     WaterLevelForecast.objects.filter(
+#             #         station_id__station_id__in=station_ids_to_fetch,
+#             #         forecast_date__in=incoming_dates
+#             #     ).delete()
+#             #     logger.info(f"Cleared existing overlapping forecast records for {station_name}")
+    
+#             forecast_instances = []
+#             for i, fc_data in enumerate(parsed_forecast_data):
+#                 station_obj = station_objects_map.get(fc_data['station_id_val'])
+#                 if not station_obj:
+#                     logger.warning(f"Station with ID {fc_data['station_id_val']} not found for forecast. Skipping.")
+#                     skipped_count += 1
+#                     continue
+#                 forecast_instances.append(
+#                     WaterLevelForecast(
+#                         station_id=station_obj,
+#                         forecast_date=fc_data['forecast_date'],
+#                         water_level=fc_data['water_level']
+#                     )
+#                 )
+
+#             if forecast_instances:
+#                 # First, try to insert all records, ignoring conflicts
+#                 WaterLevelForecast.objects.bulk_create(forecast_instances, ignore_conflicts=True)
+#                 # WaterLevelForecast.objects.bulk_create(
+#                 #     forecast_instances,
+#                 #     update_conflicts=True,
+#                 #     unique_fields=['station_id', 'forecast_date'],
+#                 #     update_fields=['water_level']
+#                 # )
+
+#                 # Now, identify and update the records that already existed
+#                 keys_to_update = {(f.station_id.station_id, f.forecast_date): f.water_level for f in forecast_instances}
+                
+#                 # Fetch only the objects that need an update
+#                 existing_objects_to_update = WaterLevelForecast.objects.filter(
+#                     station_id__station_id__in=[f.station_id.station_id for f in forecast_instances],
+#                     forecast_date__in=[f.forecast_date for f in forecast_instances]
+#                 ).select_related('station_id')
+
+#                 records_to_bulk_update = []
+#                 for obj in existing_objects_to_update:
+#                     key = (obj.station_id.station_id, obj.forecast_date)
+#                     new_water_level = keys_to_update.get(key)
+#                     if new_water_level is not None and obj.water_level != new_water_level:
+#                         obj.water_level = new_water_level
+#                         records_to_bulk_update.append(obj)
+                
+#                 if records_to_bulk_update:
+#                     updated_count = WaterLevelForecast.objects.bulk_update(records_to_bulk_update, fields=['water_level'])
+#                 inserted_count = len(forecast_instances) - len(records_to_bulk_update)
+
+
+#             progress_recorder.set_progress(90, 100, description=f"Database operations complete for {station_name}.")
+
+#         result_message = (
+#             f"Processed {station_name}: {inserted_count} inserted, "
+#             f"{updated_count} updated, {skipped_count} skipped."
+#         )
+#         logger.info(result_message)
+#         progress_recorder.set_progress(100, 100, description=result_message)
+#         self.update_state(
+#             state=states.SUCCESS,
+#             meta={
+#                 'message': result_message,
+#                 'inserted': inserted_count,
+#                 'updated': updated_count,
+#                 'skipped': skipped_count,
+#                 'total_processed': total_processed_rows
+#             }
+#         )
+#         return {
+#             "inserted_rows": inserted_count,
+#             "updated_rows": updated_count,
+#             "skipped_rows": skipped_count,
+#             "total_rows": total_processed_rows,
+#             "state": states.SUCCESS
+#         }
+
+#     except Ignore:
+#         logger.warning(f"Task for {station_name} ignored based on task logic.")
+#         self.update_state(state=states.REVOKED, meta={'message': f"Task for {station_name} ignored."})
+#         return None
+
+#     except Exception as e:
+#         import traceback
+#         error_traceback = traceback.format_exc()
+#         error_message_for_log = f"Task for {station_name} failed: {e}\n{error_traceback}"
+#         logger.error(error_message_for_log)
+#         progress_recorder.set_progress(100, 100, description=f"Error: {e}")
+#         self.update_state(state=states.FAILURE, meta={'message': str(e)})
+
+#         return None
+
+
+
+
 
 @shared_task(bind=True)
 def import_experimental_forecast_files(self, duration, forecastDF_dict, stationNameToIdDict, station_name):

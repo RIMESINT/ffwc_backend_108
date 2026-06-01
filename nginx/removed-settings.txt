@@ -1,0 +1,8 @@
+#        if ($http_origin ~* "^(https://ffwc\.gov\.bd|https://www\.ffwc\.gov\.bd|nlas\.dls\.gov\.bd|www\.nlas\.dls\.gov\.bd|http://localhost:4200|http://127\.0.0.1:4200)$") {
+
+            # 3. CRITICAL: Must include 'x-ffwc-internal-key' in allowed headers
+        # because your Angular app is sending it in every request.
+        add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Range, x-ffwc-internal-key" always;
+        add_header Access-Control-Expose-Headers "Content-Length, Content-Range" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        

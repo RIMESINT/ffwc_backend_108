@@ -156,7 +156,7 @@ class StationAdmin(admin.ModelAdmin):
         ('Basic Info', {'fields': ('station_id', 'station_code', 'bwdb_id', 'name', 'name_bn')}),
         ('Location', {'fields': ('latitude', 'longitude', 'division', 'district', 'upazilla', 'union')}),
         ('River Info', {'fields': ('river', 'river_bn', 'river_chainage', 'basin')}),
-        ('Water Level Info', {'fields': ('danger_level', 'highest_water_level', 'highest_water_level_date')}),
+        ('Water Level Info', {'fields': ('danger_level', 'highest_water_level', 'highest_water_level_date','pmdl')}),
         ('Forecast Settings', {'fields': ('five_days_forecast', 'ten_days_forecast', 'monsoon_station', 'pre_monsoon_station', 'dry_period_station')}),
         ('Other', {'fields': ('status', 'station_order', 'medium_range_station', 'experimental', 'ffdata_header')}),
     )
@@ -434,15 +434,23 @@ class WaterlevelForecastAdmin(admin.ModelAdmin, ExportCsvMixin):
                     normalized_db_name = s.name.strip().replace(' ', '').lower()
                     station_name_to_id_map[normalized_db_name] = s.station_id # Store Station.station_id
             logger.info(f"Station name to ID map built: {station_name_to_id_map}")
-
+            
             station_aliases = {
-                'baiderbazar': 'baidyarbazar',
+                # --- FIXED MATCHES (Based on your exact Database keys) ---
+                'baiderbazar': 'bayderbazar',      # Filename 'Baiderbazar' -> DB 'bayderbazar'
+                'sutangrly.bridge': 'sutang-rb',   # Filename 'Sutangrly.bridge' -> DB 'sutang-rb'
+                'sutangrlybridge': 'sutang-rb',    # Fallback copy
+                
+                # --- CORRECTION FOR ELASINGHAT ---
+                # Removing the old 'elasinghat': 'elasin' map ensures it passes straight 
+                # through to match the correct DB key: 'elasinghat'
+                'elasinghat': 'elasinghat',
+
+                # --- REGULAR WORKING ALIASES ---
                 'barisal': 'barishal',
                 'bogra': 'bogura',
                 'c-nawabganj': 'chapai-nawabganj',
                 'chittagong': 'chattogram',
-                'chittagong': 'chattogram',
-                'elasinghat': 'elasin',
                 'manu-rly-br': 'manu-rb',
                 'meghna-br': 'meghnabridge',
                 'mohadevpur': 'mohadebpur',
@@ -450,14 +458,46 @@ class WaterlevelForecastAdmin(admin.ModelAdmin, ExportCsvMixin):
                 'sherpur': 'sherpur-sylhet',
                 'comilla': 'cumilla',
                 'jibanpur': 'debidwar',
-
-                # 'rekabibazar': 'rekabi',
-                # 'c-nawabganj': 'c',
-                # 'meghna-br': 'meghna',
-                # 'hardinge-rb': 'hardinge',
-                # 'manu-rly-br': 'manu',
-                # 'gorai-rb': 'gorai'
             }
+
+            # station_aliases = {
+                
+            #     'baiderbazar': 'baidyarbazar',
+            #     'baidyarbazar': 'baidyarbazar',
+                
+            #     'sutangrly.bridge': 'sutangrlybridge',
+            #     'sutangrlybridge': 'sutangrlybridge',
+                
+                
+            #     'barisal': 'barishal',
+            #     'bogra': 'bogura',
+            #     'c-nawabganj': 'chapai-nawabganj',
+            #     'chittagong': 'chattogram',
+            #     'manu-rly-br': 'manu-rb',
+            #     'meghna-br': 'meghnabridge',
+            #     'mohadevpur': 'mohadebpur',
+            #     'rekabibazar': 'rekabi-bazar',
+            #     'sherpur': 'sherpur-sylhet',
+            #     'comilla': 'cumilla',
+            #     'jibanpur': 'debidwar',
+                
+                
+            #     # 'barisal': 'barishal',
+            #     # 'bogra': 'bogura',
+            #     # 'c-nawabganj': 'chapai-nawabganj',
+            #     # 'chittagong': 'chattogram',
+            #     # 'chittagong': 'chattogram',
+    
+            #     # 'manu-rly-br': 'manu-rb',
+            #     # 'meghna-br': 'meghnabridge',
+            #     # 'mohadevpur': 'mohadebpur',
+            #     # 'rekabibazar': 'rekabi-bazar',
+            #     # 'sherpur': 'sherpur-sylhet',
+            #     # 'comilla': 'cumilla',
+            #     # 'jibanpur': 'debidwar',
+                
+
+            # }
             logger.info(f"Custom station aliases: {station_aliases}")
             
             dispatched_task_ids_with_filenames = [] # To store task_id and filename for frontend tracking

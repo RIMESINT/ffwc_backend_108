@@ -1338,7 +1338,8 @@ class RecentObservedWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
         observed_values_dict = defaultdict(list)
 
         observations = models.WaterLevelObservation.objects.filter(
-            observation_date__gte=one_day_ago
+            observation_date__gte=one_day_ago,
+            station_id__status=True
         ).values('station_id', 'observation_date', 'water_level').order_by('station_id', 'observation_date')
 
         for result in observations:
@@ -5186,68 +5187,150 @@ def get_forecast_metadata(request):
 from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
 
+logger = logging.getLogger(__name__)
+
 @method_decorator(csrf_exempt, name='dispatch')
 class ProxyRequestView(View):
-    # Allowed methods for the proxy
     ALLOWED_METHODS = ('GET', 'POST', 'PUT', 'PATCH', 'HEAD', 'OPTIONS')
-    # Use the same key as your middleware
     SECRET_VAL = "FFWC-Project-2026-Secure-V1"
 
     def post(self, request, *args, **kwargs):
-        # 1. Security Check: Block unauthorized proxy use
+        # 1. TRACING: Verify the Internal Key reaches Django
         app_key = request.headers.get('x-ffwc-internal-key')
+        print(f"\n--- [PROXY DEBUG START] ---")
+        print(f"Internal Key Received: {app_key}")
+
         if app_key != self.SECRET_VAL:
+            print(f"ERROR: Security Key Mismatch. Expected: {self.SECRET_VAL}")
             return JsonResponse({'error': 'Unauthorized Proxy Access'}, status=403)
 
-        # 2. Parse the Incoming JSON
+        # 2. Parse Payload
         try:
             payload = json.loads(request.body)
         except (json.JSONDecodeError, ValueError):
             return JsonResponse({'error': 'Invalid JSON body'}, status=400)
 
         url = payload.get('url')
-        if not url:
-            return JsonResponse({'error': 'Target url is required'}, status=400)
-
         method = payload.get('method', 'POST').upper()
-        if method not in self.ALLOWED_METHODS:
-            return JsonResponse({'error': f'Method {method} not allowed'}, status=405)
+        print(f"Targeting URL: {url} using {method}")
 
-        # 3. Prepare the Outbound Request Configuration
-        headers = payload.get('headers', {})
+        # 3. Mirror Postman Headers (THE FIX)
+        # We start with headers provided in payload, but we clean/override them
+        incoming_headers = payload.get('headers', {})
+        
+        # Clean standard headers that might cause 403 if they point to the wrong host
+        for key in ['Host', 'host', 'Origin', 'origin', 'Referer', 'referer']:
+            incoming_headers.pop(key, None)
+
+        # Re-build headers to look exactly like a valid client
+        outbound_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+        }
+        # Merge payload headers (like Authorization token) into our clean set
+        outbound_headers.update(incoming_headers)
+
         body = payload.get('body', {})
         params = payload.get('params', {})
-        timeout = payload.get('timeout', 30)
-
-        # Build the arguments for the requests library
+        
         request_kwargs = {
             'url': url,
-            'headers': headers,
+            'headers': outbound_headers,
             'params': params,
-            'verify': False, # Avoid SSL issues with internal gov certificates
-            'timeout': timeout,
+            'verify': False, 
+            'timeout': 30,
         }
 
-        # If it's a data-carrying request, send as JSON
         if method not in ('GET', 'HEAD', 'OPTIONS'):
             request_kwargs['json'] = body
 
-        # 4. Perform the request and return the result
+        # 4. Execution & Detailed Response Tracing
         try:
+            print(f"Sending Request to Upstream...")
             response = requests.request(method=method, **request_kwargs)
+            print(f"Upstream responded with Status: {response.status_code}")
             
-            # Check if response is JSON
+            # If we still get a 403, print the first 200 chars of response for debugging
+            if response.status_code == 403:
+                print(f"UPSTREAM 403 DETECTED. Content snippet: {response.text[:200]}")
+
             try:
                 return JsonResponse(response.json(), safe=False, status=response.status_code)
             except ValueError:
-                # Fallback to raw text (HTML, XML, or Plain Text)
                 return HttpResponse(
                     content=response.text,
                     status=response.status_code,
                     content_type=response.headers.get('Content-Type', 'text/plain')
                 )
 
-        except requests.exceptions.Timeout:
-            return JsonResponse({'error': 'Upstream API (BWDB) timed out'}, status=504)
-        except requests.exceptions.RequestException as e:
-            return JsonResponse({'error': f'Proxy Connection Error: {str(e)}'}, status=502)
+        except Exception as e:
+            print(f"PROXY EXCEPTION: {str(e)}")
+            return JsonResponse({'error': f'Proxy Error: {str(e)}'}, status=502)
+
+# @method_decorator(csrf_exempt, name='dispatch')
+# class ProxyRequestView(View):
+#     # Allowed methods for the proxy
+#     ALLOWED_METHODS = ('GET', 'POST', 'PUT', 'PATCH', 'HEAD', 'OPTIONS')
+#     # Use the same key as your middleware
+#     SECRET_VAL = "FFWC-Project-2026-Secure-V1"
+
+#     def post(self, request, *args, **kwargs):
+#         # 1. Security Check: Block unauthorized proxy use
+#         app_key = request.headers.get('x-ffwc-internal-key')
+#         if app_key != self.SECRET_VAL:
+#             return JsonResponse({'error': 'Unauthorized Proxy Access'}, status=403)
+
+#         # 2. Parse the Incoming JSON
+#         try:
+#             payload = json.loads(request.body)
+#         except (json.JSONDecodeError, ValueError):
+#             return JsonResponse({'error': 'Invalid JSON body'}, status=400)
+
+#         url = payload.get('url')
+#         if not url:
+#             return JsonResponse({'error': 'Target url is required'}, status=400)
+
+#         method = payload.get('method', 'POST').upper()
+#         if method not in self.ALLOWED_METHODS:
+#             return JsonResponse({'error': f'Method {method} not allowed'}, status=405)
+
+#         # 3. Prepare the Outbound Request Configuration
+#         headers = payload.get('headers', {})
+#         body = payload.get('body', {})
+#         params = payload.get('params', {})
+#         timeout = payload.get('timeout', 30)
+
+#         # Build the arguments for the requests library
+#         request_kwargs = {
+#             'url': url,
+#             'headers': headers,
+#             'params': params,
+#             'verify': False, # Avoid SSL issues with internal gov certificates
+#             'timeout': timeout,
+#         }
+
+#         # If it's a data-carrying request, send as JSON
+#         if method not in ('GET', 'HEAD', 'OPTIONS'):
+#             request_kwargs['json'] = body
+
+#         # 4. Perform the request and return the result
+#         try:
+#             response = requests.request(method=method, **request_kwargs)
+            
+#             # Check if response is JSON
+#             try:
+#                 return JsonResponse(response.json(), safe=False, status=response.status_code)
+#             except ValueError:
+#                 # Fallback to raw text (HTML, XML, or Plain Text)
+#                 return HttpResponse(
+#                     content=response.text,
+#                     status=response.status_code,
+#                     content_type=response.headers.get('Content-Type', 'text/plain')
+#                 )
+
+#         except requests.exceptions.Timeout:
+#             return JsonResponse({'error': 'Upstream API (BWDB) timed out'}, status=504)
+#         except requests.exceptions.RequestException as e:
+#             return JsonResponse({'error': f'Proxy Connection Error: {str(e)}'}, status=502)

@@ -3,7 +3,7 @@ import os,json
 from datetime import timedelta
 import pymysql
 pymysql.install_as_MySQLdb()
-from corsheaders.defaults import default_headers
+# from corsheaders.defaults import default_headers
 
 
 DEBUG = True
@@ -68,9 +68,10 @@ XS_SHARING_ALLOWED_METHODS = ['POST', 'GET', 'OPTIONS', 'PUT', 'DELETE']
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
-SECURE_SSL_REDIRECT = True 
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+# SECURE_SSL_REDIRECT = True 
+SECURE_SSL_REDIRECT = False 
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
 
 
 
@@ -111,7 +112,7 @@ INSTALLED_APPS = [
     'app_subscriptions',
     'app_visualization',
     'app_water_watch_mobile',
-    'app_mobile_static_data',
+    'app_mobile_static_data'
     
 ]
 
