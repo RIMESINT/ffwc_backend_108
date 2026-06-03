@@ -1052,6 +1052,9 @@ class AfternoonWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
 
         return JsonResponse(waterlevel_dict, safe=False)
 
+from datetime import timedelta
+from django.db.models import Max
+
 class WaterLevelObservationExperimentalsView(APIView):
     def get(self, request, **kwargs):
         station_id = kwargs.get('st_id')
@@ -1062,25 +1065,69 @@ class WaterLevelObservationExperimentalsView(APIView):
         logger.info(f"Processing experimental observation water levels for station: {station_id}")
         
         try:
-            if not models.WaterLevelObservationExperimentals.objects.filter(station_id__station_id=station_id).exists():
-                logger.info(f"No experimental observations found for station: {station_id}")
-                return Response([], status=status.HTTP_200_OK) # Return empty array if no data
-            
-            # Query observation data for the given station, ordered by date
-            queryset = models.WaterLevelObservationExperimentals.objects.filter(
+            # 1. Base queryset filtered by station
+            base_queryset = models.WaterLevelObservationExperimentals.objects.filter(
                 station_id__station_id=station_id
-            ).order_by('observation_date') # <<<--- CHANGED THIS LINE
+            )
+
+            if not base_queryset.exists():
+                logger.info(f"No experimental observations found for station: {station_id}")
+                return Response([], status=status.HTTP_200_OK)
+            
+            # 2. Find the latest available observation date in the dataset
+            latest_date_dict = base_queryset.aggregate(max_date=Max('observation_date'))
+            latest_date = latest_date_dict['max_date']
+            
+            # 3. Calculate the date 10 days prior to the latest date
+            ten_days_ago = latest_date - timedelta(days=10)
+            
+            # 4. Filter queryset to include only the last 10 days of data
+            queryset = base_queryset.filter(
+                observation_date__gte=ten_days_ago
+            ).order_by('observation_date') 
             
             serializer = serializers.WaterLevelObservationExperimentalsSerializer(queryset, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
         
         except models.Station.DoesNotExist: 
- 
             logger.error(f"Station with ID {station_id} does not exist in the Station model or related data.")
             return Response({"error": f"Station with ID {station_id} not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             logger.error(f"Error processing observation request for station {station_id}: {str(e)}", exc_info=True)
             return Response({"error": "An unexpected error occurred. Please try again later."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# class WaterLevelObservationExperimentalsView(APIView):
+#     def get(self, request, **kwargs):
+#         station_id = kwargs.get('st_id')
+#         if not station_id:
+#             logger.error("Station ID is required for WaterLevelObservationExperimentalsView")
+#             return Response({"error": "Station ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+#         logger.info(f"Processing experimental observation water levels for station: {station_id}")
+        
+#         try:
+#             if not models.WaterLevelObservationExperimentals.objects.filter(station_id__station_id=station_id).exists():
+#                 logger.info(f"No experimental observations found for station: {station_id}")
+#                 return Response([], status=status.HTTP_200_OK) # Return empty array if no data
+            
+#             # Query observation data for the given station, ordered by date
+#             queryset = models.WaterLevelObservationExperimentals.objects.filter(
+#                 station_id__station_id=station_id
+#             ).order_by('observation_date') 
+            
+#             serializer = serializers.WaterLevelObservationExperimentalsSerializer(queryset, many=True)
+#             return Response(serializer.data, status=status.HTTP_200_OK)
+        
+#         except models.Station.DoesNotExist: 
+ 
+#             logger.error(f"Station with ID {station_id} does not exist in the Station model or related data.")
+#             return Response({"error": f"Station with ID {station_id} not found."}, status=status.HTTP_404_NOT_FOUND)
+#         except Exception as e:
+#             logger.error(f"Error processing observation request for station {station_id}: {str(e)}", exc_info=True)
+#             return Response({"error": "An unexpected error occurred. Please try again later."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
 
 class HistoricalWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
     """
