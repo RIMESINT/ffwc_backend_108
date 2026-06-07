@@ -560,7 +560,7 @@ class WaterlevelForecastAdmin(admin.ModelAdmin, ExportCsvMixin):
 
 
 
-# Custom Admin for WaterLevelForecastsExperimentals
+# # Custom Admin for WaterLevelForecastsExperimentals
 @admin.register(WaterLevelForecastsExperimentals)
 class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
     list_display = ('display_station_id', 'station_code', 'station_name', 'forecast_date', 'waterlevel_min', 'waterlevel_max', 'waterlevel_mean')
@@ -569,14 +569,12 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
     list_per_page = 25
     ordering = ('station_id_id',)
 
-    change_list_template = "admin/data_load/waterlevelforecastsexperimental/change_list.html" # Path for the changelist template
+    change_list_template = "admin/data_load/waterlevelforecastsexperimental/change_list.html"
 
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
-            # URL for importing experimental forecast CSVs (uses same form)
             path('import-csv/', self.admin_site.admin_view(self.import_experimental_forecast_csv), name='experimental-forecast-import-csv'),
-            # URL for polling task status for experimental forecasts
             path('task-status-experimental/<str:task_id>/', self.admin_site.admin_view(self.task_status_experimental_view), name='task_status_experimental'),
         ]
         return custom_urls + urls
@@ -586,7 +584,7 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
         
         if request.method == "POST":
             logger.info("Received POST request for experimental forecast CSV import")
-            form = ForecastCsvImportForm(request.POST, request.FILES) # Use the same form for multiple files
+            form = ForecastCsvImportForm(request.POST, request.FILES)
 
             if not form.is_valid():
                 logger.error(f"Invalid form data: {form.errors.as_json()}")
@@ -602,6 +600,7 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
                 messages.error(request, "No files were uploaded.")
                 return JsonResponse({"error": "No files uploaded"}, status=400)
 
+            # Pre-fetch and normalize master station database keys
             station_name_to_id_map = {}
             for s in Station.objects.all():
                 if s.name:
@@ -609,32 +608,25 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
                     station_name_to_id_map[normalized_db_name] = s.station_id
             logger.info(f"Station name to ID map built: {station_name_to_id_map}")
 
+            # Fixed station dictionary aliases matching your database shell snapshot
             station_aliases = {
-
-                # 'gorai-rb': 'gorai'
-                # 'rekabibazar': 'rekabi', 'c-nawabganj': 'c', 'meghna-br': 'meghna',
-                # 'hardinge-rb': 'hardinge', 'manu-rly-br': 'manu', 'gorai-rb': 'gorai'
-                # 'baiderbazar': 'baidyarbazar',
-                # 'barisal': 'barishal',
-                # 'bogra': 'bogura',
-                # 'c-nawabganj': 'chapai-nawabganj',
-                # 'chittagong': 'chattogram',
-                # 'chittagong': 'chattogram',
-                'elasinghat': 'elasin',
-                'elashinghat': 'elasin',
-                'hardinge-bridge':'hardinge-rb',
-                'hardinge':'hardinge-rb',
-                'sureshwar':'sureshswar'
-
                 
-                # 'manu-rly-br': 'manu-rb',
-                # 'meghna-br': 'meghnabridge',
-                # 'mohadevpur': 'mohadebpur',
-                # 'rekabibazar': 'rekabi-bazar',
-                # 'sherpur': 'sherpur-sylhet',
-                # 'comilla': 'cumilla',
-                # 'jibanpur': 'debidwar',
-
+                'mohadevpur': 'mohadebpur',       
+                'sherpur': 'sherpur-sylhet',
+                
+                'baiderbazar': 'bayderbazar',
+                'sutangrly.bridge': 'sutang-rb',
+                'sutangrlybridge': 'sutang-rb',
+                'elasinghat': 'elasinghat',
+                'elashinghat': 'elasinghat',
+                'hardinge-bridge': 'hardinge-rb',
+                'hardinge': 'hardinge-rb',
+                'sureshwar': 'sureshswar',
+                'barisal': 'barishal',
+                'bogra': 'bogura',
+                'comilla': 'cumilla',
+                'chittagong': 'chattogram',
+                'jibanpur': 'debidwar'
             }
             logger.info(f"Custom station aliases: {station_aliases}")
             
@@ -643,26 +635,32 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
 
             for f in uploaded_files:
                 try:
-                    file_station_name = os.path.splitext(f.name)[0].strip().replace(' ', '').lower()
-                    logger.info(f"Processing file: {f.name}, derived station_name: {file_station_name}")
+                    # Clean punctuation variants cleanly
+                    base_name = os.path.splitext(f.name)[0].strip().lower()
+                    
+                    # 1. First, preserve text periods for compound targets like 'sutangrly.bridge'
+                    if base_name in station_aliases:
+                        file_station_name = station_aliases[base_name]
+                    else:
+                        # 2. Otherwise drop spaces and fallback to simple string matching
+                        file_station_name = base_name.replace(' ', '')
+                        if file_station_name in station_aliases:
+                            file_station_name = station_aliases[file_station_name]
 
-                    if file_station_name in station_aliases:
-                        file_station_name = station_aliases[file_station_name]
+                    logger.info(f"Processing file: {f.name}, derived station_name: {file_station_name}")
                         
                     if file_station_name not in station_name_to_id_map:
-                        error_msg = f"Station '{file_station_name}' derived from filename '{f.name}' not found in mapping. Skipping this file."
+                        error_msg = f"Station identification key '{file_station_name}' derived from filename '{f.name}' not found in mapping list. Skipping."
                         logger.error(error_msg)
                         messages.warning(request, error_msg)
                         continue
 
                     file_obj = f.read()
                     pd_csv = io.BytesIO(file_obj)
-                    # --- UPDATED: skiprows=2 and delimiter=',' for experimental files ---
                     forecastDF = pd.read_csv(pd_csv, skiprows=1, encoding='utf-8-sig', delimiter=',')
                     
                     logger.info(f"DataFrame for {f.name} columns: {forecastDF.columns.tolist()}")
 
-                    # Dispatch to the new experimental forecast task
                     task = import_experimental_forecast_files.delay(1, forecastDF.to_dict(), station_name_to_id_map, file_station_name)
                     dispatched_task_ids_with_filenames.append({'id': task.id, 'name': f.name})
                     tasks_dispatched_count += 1
@@ -685,21 +683,15 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
 
         logger.info("Rendering experimental forecast CSV import form")
         form = ForecastCsvImportForm()
-        # Reusing the multiple_csv_upload template
         context = self.admin_site.each_context(request)
         context['title'] = 'Upload Experimental Water Level Forecasts CSV'
         context['form'] = form
         context['opts'] = self.model._meta
-        # Crucially, pass the correct task status URL name for the JS
         context['task_status_url_name'] = 'admin:task_status_experimental' 
         return render(request, "admin/multiple_csv_upload.html", context)
 
-
-
-    # Re-using the shared helper for status view
     def task_status_experimental_view(self, request, task_id):
         return JsonResponse(_get_task_status_response_data(task_id, 'admin:task_status_experimental'))
-
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -717,6 +709,191 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
     def station_code(self, obj):
         return obj.station_id.station_code if obj.station_id else None
     station_code.short_description = 'Station Code'
+
+
+# --- BULK TASK POLLING SYSTEM CIRCUIT BREAKER ---
+def _get_task_status_response_data(task_id, reverse_url_name):
+    result = AsyncResult(task_id)
+    try:
+        task_state = result.backend.get_status(task_id)
+    except Exception:
+        task_state = states.FAILURE
+
+    response_data = {
+        'state': task_state,
+        'message': 'Processing and syncing timeseries entries...', 
+        'percent': 0,
+        'current': 0,
+        'total': 0,
+        'status_url': reverse(reverse_url_name, args=[task_id])
+    }
+
+    try:
+        raw_info = result.backend.get_result(task_id)
+    except Exception:
+        raw_info = None
+
+    if isinstance(raw_info, dict):
+        response_data.update(raw_info)
+        response_data['message'] = raw_info.get('message', 'Processing...')
+        response_data['percent'] = raw_info.get('percent', 0)
+        
+        if raw_info.get('state') == 'FAILED' or task_state in [states.FAILURE, 'FAILED']:
+            response_data['state'] = states.FAILURE
+            response_data['percent'] = 100
+    else:
+        if task_state in [states.FAILURE, 'FAILED']:
+            response_data['state'] = states.FAILURE
+            response_data['message'] = f"Task failure: {str(raw_info) if raw_info else 'Internal execution crash'}"
+            response_data['percent'] = 100
+        elif task_state == states.SUCCESS:
+            response_data['message'] = 'Task completed successfully.'
+            response_data['percent'] = 100
+
+    if response_data['state'] == states.SUCCESS:
+        response_data['percent'] = 100
+
+    return response_data
+
+
+# @admin.register(WaterLevelForecastsExperimentals)
+# class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
+#     list_display = ('display_station_id', 'station_code', 'station_name', 'forecast_date', 'waterlevel_min', 'waterlevel_max', 'waterlevel_mean')
+#     list_filter = ('forecast_date',)
+#     search_fields = ('station_id__name', 'station_id__station_code')
+#     list_per_page = 25
+#     ordering = ('station_id_id',)
+
+#     change_list_template = "admin/data_load/waterlevelforecastsexperimental/change_list.html" # Path for the changelist template
+
+#     def get_urls(self):
+#         urls = super().get_urls()
+#         custom_urls = [
+#             # URL for importing experimental forecast CSVs (uses same form)
+#             path('import-csv/', self.admin_site.admin_view(self.import_experimental_forecast_csv), name='experimental-forecast-import-csv'),
+#             # URL for polling task status for experimental forecasts
+#             path('task-status-experimental/<str:task_id>/', self.admin_site.admin_view(self.task_status_experimental_view), name='task_status_experimental'),
+#         ]
+#         return custom_urls + urls
+
+#     def import_experimental_forecast_csv(self, request):
+#         logger.info("Starting import_experimental_forecast_csv at %s", datetime.now())
+        
+#         if request.method == "POST":
+#             logger.info("Received POST request for experimental forecast CSV import")
+#             form = ForecastCsvImportForm(request.POST, request.FILES) # Use the same form for multiple files
+
+#             if not form.is_valid():
+#                 logger.error(f"Invalid form data: {form.errors.as_json()}")
+#                 messages.error(request, f"Invalid form data: {form.errors.as_text()}")
+#                 return JsonResponse({"error": "Invalid form data", "details": form.errors.as_json()}, status=400)
+
+#             uploaded_files = form.cleaned_data.get('forecast_csv_file', [])
+#             noOfFiles = len(uploaded_files)
+#             logger.info(f"Received {noOfFiles} files: {[f.name for f in uploaded_files]}")
+
+#             if noOfFiles == 0:
+#                 logger.error("No files uploaded")
+#                 messages.error(request, "No files were uploaded.")
+#                 return JsonResponse({"error": "No files uploaded"}, status=400)
+
+#             station_name_to_id_map = {}
+#             for s in Station.objects.all():
+#                 if s.name:
+#                     normalized_db_name = s.name.strip().replace(' ', '').lower()
+#                     station_name_to_id_map[normalized_db_name] = s.station_id
+#             logger.info(f"Station name to ID map built: {station_name_to_id_map}")
+
+#             station_aliases = {
+
+#                 'elasinghat': 'elasin',
+#                 'elashinghat': 'elasin',
+#                 'hardinge-bridge':'hardinge-rb',
+#                 'hardinge':'hardinge-rb',
+#                 'sureshwar':'sureshswar'
+
+#             }
+#             logger.info(f"Custom station aliases: {station_aliases}")
+            
+#             dispatched_task_ids_with_filenames = []
+#             tasks_dispatched_count = 0
+
+#             for f in uploaded_files:
+#                 try:
+#                     file_station_name = os.path.splitext(f.name)[0].strip().replace(' ', '').lower()
+#                     logger.info(f"Processing file: {f.name}, derived station_name: {file_station_name}")
+
+#                     if file_station_name in station_aliases:
+#                         file_station_name = station_aliases[file_station_name]
+                        
+#                     if file_station_name not in station_name_to_id_map:
+#                         error_msg = f"Station '{file_station_name}' derived from filename '{f.name}' not found in mapping. Skipping this file."
+#                         logger.error(error_msg)
+#                         messages.warning(request, error_msg)
+#                         continue
+
+#                     file_obj = f.read()
+#                     pd_csv = io.BytesIO(file_obj)
+#                     # --- UPDATED: skiprows=2 and delimiter=',' for experimental files ---
+#                     forecastDF = pd.read_csv(pd_csv, skiprows=1, encoding='utf-8-sig', delimiter=',')
+                    
+#                     logger.info(f"DataFrame for {f.name} columns: {forecastDF.columns.tolist()}")
+
+#                     # Dispatch to the new experimental forecast task
+#                     task = import_experimental_forecast_files.delay(1, forecastDF.to_dict(), station_name_to_id_map, file_station_name)
+#                     dispatched_task_ids_with_filenames.append({'id': task.id, 'name': f.name})
+#                     tasks_dispatched_count += 1
+#                     logger.info(f"Started import_experimental_forecast_files task with ID: {task.id} for file: {f.name}")
+#                 except Exception as e:
+#                     logger.error(f"Error processing file {f.name}: {str(e)}", exc_info=True)
+#                     messages.error(request, f"Error processing file {f.name}: {str(e)}")
+#                     continue
+
+#             if dispatched_task_ids_with_filenames:
+#                 messages.success(request, f"Started import tasks for {tasks_dispatched_count} of {noOfFiles} files.")
+#                 return JsonResponse({
+#                     "task_ids": dispatched_task_ids_with_filenames,
+#                     "total_files": noOfFiles,
+#                     "message": f"Started processing {tasks_dispatched_count} file(s)"
+#                 })
+#             else:
+#                 messages.error(request, "No tasks were started. Please check the uploaded files and try again.")
+#                 return JsonResponse({"error": "No tasks started"}, status=400)
+
+#         logger.info("Rendering experimental forecast CSV import form")
+#         form = ForecastCsvImportForm()
+#         # Reusing the multiple_csv_upload template
+#         context = self.admin_site.each_context(request)
+#         context['title'] = 'Upload Experimental Water Level Forecasts CSV'
+#         context['form'] = form
+#         context['opts'] = self.model._meta
+#         # Crucially, pass the correct task status URL name for the JS
+#         context['task_status_url_name'] = 'admin:task_status_experimental' 
+#         return render(request, "admin/multiple_csv_upload.html", context)
+
+
+
+#     # Re-using the shared helper for status view
+#     def task_status_experimental_view(self, request, task_id):
+#         return JsonResponse(_get_task_status_response_data(task_id, 'admin:task_status_experimental'))
+
+
+#     def get_queryset(self, request):
+#         qs = super().get_queryset(request)
+#         return qs.select_related('station_id').exclude(station_id__isnull=True)
+
+#     def display_station_id(self, obj):
+#         return obj.station_id_id if obj.station_id else None
+#     display_station_id.short_description = 'Station ID'
+#     display_station_id.admin_order_field = 'station_id_id'
+
+#     def station_name(self, obj):
+#         return obj.station_id.name if obj.station_id else 'Unknown'
+#     station_name.short_description = 'Name'
+
+#     def station_code(self, obj):
+#         return obj.station_id.station_code if obj.station_id else None
+#     station_code.short_description = 'Station Code'
 
 # Custom Admin for RainfallObservation
 @admin.register(RainfallObservation)
