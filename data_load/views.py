@@ -434,28 +434,32 @@ class ObservedWaterlevelByStationAndDateViewSet(viewsets.ReadOnlyModelViewSet):
 
     def list(self, request, station_id=None, date=None, *args, **kwargs):
         try:
-            # Parse the date parameter (YYYY-MM-DD)
+            # 1. Parse the date parameter (YYYY-MM-DD)
             try:
-                start_date = datetime.strptime(date, '%Y-%m-%d').date()
-                start_datetime = datetime.combine(start_date, datetime.min.time())
-                end_datetime = start_datetime + timedelta(days=1)
+                target_date = datetime.strptime(date, '%Y-%m-%d').date()
+                # Create the upper bound (end of the target day, e.g., 23:59:59)
+                end_datetime = datetime.combine(target_date, time.max)
+                # Create the lower bound (40 days before the start of the target day)
+                start_datetime = datetime.combine(target_date, time.min) - timedelta(days=40)
             except ValueError:
                 return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
-            # Query for the specified station and date range
+            # 2. Query for the specified station and the 40-day date range
             queryset = models.WaterLevelObservation.objects.filter(
                 station_id__station_id=station_id,
                 station_id__isnull=False,
                 station_id__station_id__in=models.Station.objects.values('station_id'),
-                observation_date__gte=start_datetime-timedelta(days=10),
-                observation_date__lte=end_datetime-timedelta(days=0)
+                observation_date__gte=start_datetime,
+                observation_date__lte=end_datetime
             ).order_by('-observation_date')
 
-            # Serialize the data
+            # 3. Serialize the data
             serializer = self.get_serializer(queryset, many=True)
+            
             # Filter out None entries (invalid stations)
             response_data = [entry for entry in serializer.data if entry]
             return JsonResponse(response_data, safe=False)
+            
         except models.Station.DoesNotExist:
             return JsonResponse([], safe=False)  # Return empty list if station doesn't exist
         except Exception as e:
@@ -1700,35 +1704,62 @@ class ThreeDaysObservedRainfallViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 
-class RainfallByStationViewSet(viewsets.ReadOnlyModelViewSet):
+# class RainfallByStationViewSet(viewsets.ReadOnlyModelViewSet):
 
+#     serializer_class = serializers.ThreeDaysObservedRainfallSerializer
+
+#     def list(self, request, station_id=None, *args, **kwargs):
+#         # Get the latest observation date for filtering
+#         latest_entry = models.RainfallObservation.objects.latest('observation_date')
+#         latest_entry_date_time = latest_entry.observation_date
+
+#         # Query for the last 40 days of data for the specified station_id
+#         queryset = models.RainfallObservation.objects.filter(
+#             station_id=station_id,
+#             observation_date__gte=latest_entry_date_time - timedelta(days=40)
+#         ).order_by('-observation_date')
+
+#         # Serialize the data
+#         serializer = self.get_serializer(queryset, many=True)
+#         response_data = [
+#             {
+#                 "st_id": entry["station_id"],
+#                 "rf_date": entry["observation_date"],
+#                 "rainfall": f"{float(entry['rainfall']):.2f}"
+#             }
+#             for entry in serializer.data
+#         ]
+
+#         return JsonResponse(response_data, safe=False)
+
+class RainfallByStationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = serializers.ThreeDaysObservedRainfallSerializer
 
     def list(self, request, station_id=None, *args, **kwargs):
-        # Get the latest observation date for filtering
+        # 1. Get the latest observation date for filtering
         latest_entry = models.RainfallObservation.objects.latest('observation_date')
         latest_entry_date_time = latest_entry.observation_date
 
-        # Query for the last 30 days of data for the specified station_id
+        # 2. Query for the last 40 days of data for the specified station_id
         queryset = models.RainfallObservation.objects.filter(
             station_id=station_id,
-            observation_date__gte=latest_entry_date_time - timedelta(days=30)
+            observation_date__gte=latest_entry_date_time - timedelta(days=40)
         ).order_by('-observation_date')
 
-        # Serialize the data
+        # 3. Serialize the data
         serializer = self.get_serializer(queryset, many=True)
+        
+        # 4. Map directly without extra date parsing overhead
         response_data = [
             {
                 "st_id": entry["station_id"],
-                "rf_date": entry["observation_date"],
+                "rf_date": entry["observation_date"],  # This is already a formatted string now!
                 "rainfall": f"{float(entry['rainfall']):.2f}"
             }
             for entry in serializer.data
         ]
 
         return JsonResponse(response_data, safe=False)
-
-
 def get_experimental_stations(request):
     stations = models.Station.objects.filter(experimental=True).order_by('station_id').annotate(
         json_id=F('station_id') 

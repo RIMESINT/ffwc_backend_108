@@ -1160,7 +1160,8 @@ class RainfallObservationByDateSerializer(serializers.Serializer):
         return obj.get('max_rainfall')
         
 class ThreeDaysObservedRainfallSerializer(serializers.ModelSerializer):
-    observation_date = serializers.DateTimeField(format="%d-%m-%Y")
+    # observation_date = serializers.DateTimeField(format="%d-%m-%Y")
+    observation_date = serializers.DateTimeField(format="%m-%d-%Y")
     rainfall = serializers.DecimalField(max_digits=8, decimal_places=2, coerce_to_string=True)
 
     class Meta:
