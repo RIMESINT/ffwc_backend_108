@@ -20,10 +20,10 @@ DISTRICT_NAME_MAPPING = {
 }
 
 class Command(BaseCommand):
-    help = 'Clears and regenerates district flood alerts to reflect current observed data.'
+    help = 'Clears and regenerates district flood alerts for a 7-day window starting from the targeted date.'
 
     def add_arguments(self, parser):
-        parser.add_argument('date', type=str, nargs='?', help='YYYY-MM-DD')
+        parser.add_argument('date', type=str, nargs='?', help='YYYY-MM-DD (The baseline start date)')
 
     def calculate_flood_level(self, water_level, danger_level):
         try:
@@ -45,11 +45,13 @@ class Command(BaseCommand):
             return "normal"
 
     def handle(self, *args, **options):
-        # 1. Setup Date
+        # 1. Setup Base Date
         date_str = options['date']
-        target_date = datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else timezone.now().date()
+        base_date = datetime.strptime(date_str, '%Y-%m-%d').date() if date_str else timezone.now().date()
         
-        # 2. Fetch skip settings
+        self.stdout.write(self.style.WARNING(f"Initiating flood alert generation for 7 days starting from: {base_date}"))
+
+        # 2. Fetch skip settings (Cached outside loop for optimization)
         try:
             restricted_qs = models.DistrictFloodAlertAutoUpdate.objects.filter(auto_update=True).values_list('district_name', flat=True)
             do_not_update_set = {name.lower().strip() for name in restricted_qs}
@@ -57,67 +59,77 @@ class Command(BaseCommand):
             self.stderr.write(f"Settings error: {e}")
             return
 
-        # 3. Fetch current observed/peak data
-        day_start = timezone.make_aware(datetime.combine(target_date, datetime.min.time()))
-        day_end = timezone.make_aware(datetime.combine(target_date, datetime.max.time()))
-
-        qs = models.WaterLevelObservation.objects.filter(observation_date__range=(day_start, day_end))
-        if not qs.exists():
-            qs = models.WaterLevelForecast.objects.filter(forecast_date__range=(day_start, day_end))
-        
-        data_dict = {
-            item['station_id__station_id']: item['max_wl'] 
-            for item in qs.values('station_id__station_id').annotate(max_wl=Max('water_level'))
-        }
-
+        # 3. Cache station properties and labels outside loop to lower database load
         stations = models.Station.objects.filter(
             district__isnull=False, danger_level__isnull=False
         ).exclude(district='').values('station_id', 'district', 'danger_level', 'name')
 
-        # 4. Aggregate
-        district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
         alert_map = {alert.alert_type: alert for alert in models.WaterlevelAlert.objects.all()}
         type_labels = {"severe": "Severe Flood", "flood": "Flood", "warning": "Warning", "normal": "Normal", "na": "N/A"}
 
-        for station in stations:
-            raw_dist = station['district'].lower().strip()
-            norm_name = DISTRICT_NAME_MAPPING.get(raw_dist, raw_dist).lower().strip()
-            status = self.calculate_flood_level(data_dict.get(station['station_id']), station['danger_level'])
-            district_alerts[norm_name][status] += 1
-
-        # 5. REPLACE AND REINSERT
-        with transaction.atomic():
-            # CRITICAL: Delete existing alerts for this date that are NOT restricted
-            # If a district is NOT in the do_not_update_set, we remove its old record
-            delete_qs = models.DistrictFloodAlert.objects.filter(alert_date=target_date)
+        # 4. Loop over the 7-day window
+        for day_offset in range(7):
+            target_date = base_date + timedelta(days=day_offset)
             
-            # We filter the deletion to only remove districts we are allowed to auto-update
-            for old_record in delete_qs:
-                if old_record.district_name.lower().strip() not in do_not_update_set:
-                    old_record.delete()
+            day_start = timezone.make_aware(datetime.combine(target_date, datetime.min.time()))
+            day_end = timezone.make_aware(datetime.combine(target_date, datetime.max.time()))
 
-            self.stdout.write(self.style.WARNING(f"Cleared old alerts for {target_date} (excluding manual locks)."))
+            # Logic Rule:
+            # Day 0 (Base Date): Prefer Observed readings. Fallback to forecast if none exist.
+            # Day 1 to 6 (Future Dates): Query Forecast readings directly.
+            if day_offset == 0:
+                qs = models.WaterLevelObservation.objects.filter(observation_date__range=(day_start, day_end))
+                if not qs.exists():
+                    qs = models.WaterLevelForecast.objects.filter(forecast_date__range=(day_start, day_end))
+            else:
+                qs = models.WaterLevelForecast.objects.filter(forecast_date__range=(day_start, day_end))
+            
+            # Map station water level metrics
+            data_dict = {
+                item['station_id__station_id']: item['max_wl'] 
+                for item in qs.values('station_id__station_id').annotate(max_wl=Max('water_level'))
+            }
 
-            # Reinsert fresh data
-            created_count = 0
-            for dist_key, levels in district_alerts.items():
-                if dist_key in do_not_update_set:
-                    continue
+            # Aggregate stations data per district
+            district_alerts = defaultdict(lambda: {"severe": 0, "flood": 0, "warning": 0, "normal": 0, "na": 0})
 
-                max_lvl = "na"
-                for lvl in ["severe", "flood", "warning", "normal"]:
-                    if levels[lvl] > 0:
-                        max_lvl = lvl
-                        break
+            for station in stations:
+                raw_dist = station['district'].lower().strip()
+                norm_name = DISTRICT_NAME_MAPPING.get(raw_dist, raw_dist).lower().strip()
+                status = self.calculate_flood_level(data_dict.get(station['station_id']), station['danger_level'])
+                district_alerts[norm_name][status] += 1
+
+            # 5. REPLACE AND REINSERT per isolated loop target date
+            with transaction.atomic():
+                delete_qs = models.DistrictFloodAlert.objects.filter(alert_date=target_date)
                 
-                alert_obj = alert_map.get(type_labels[max_lvl])
-                if alert_obj:
-                    display_name = DISTRICT_NAME_MAPPING.get(dist_key, dist_key).title()
-                    models.DistrictFloodAlert.objects.create(
-                        alert_date=target_date,
-                        district_name=display_name,
-                        alert_type=alert_obj
-                    )
-                    created_count += 1
-            
-            self.stdout.write(self.style.SUCCESS(f"Successfully reinserted {created_count} alerts for {target_date}."))
+                # Delete records we are allowed to auto-overwrite
+                for old_record in delete_qs:
+                    if old_record.district_name.lower().strip() not in do_not_update_set:
+                        old_record.delete()
+
+                # Reinsert freshly processed entries
+                created_count = 0
+                for dist_key, levels in district_alerts.items():
+                    if dist_key in do_not_update_set:
+                        continue
+
+                    max_lvl = "na"
+                    for lvl in ["severe", "flood", "warning", "normal"]:
+                        if levels[lvl] > 0:
+                            max_lvl = lvl
+                            break
+                    
+                    alert_obj = alert_map.get(type_labels[max_lvl])
+                    if alert_obj:
+                        display_name = DISTRICT_NAME_MAPPING.get(dist_key, dist_key).title()
+                        models.DistrictFloodAlert.objects.create(
+                            alert_date=target_date,
+                            district_name=display_name,
+                            alert_type=alert_obj
+                        )
+                        created_count += 1
+                
+                self.stdout.write(self.style.SUCCESS(f"  -> Generated {created_count} district rows for date: {target_date}"))
+
+        self.stdout.write(self.style.SUCCESS(f"Successfully compiled all 7 days of flood data into the system database."))

@@ -135,7 +135,7 @@ class Command(BaseCommand):
                 "metadata": {
                     "station_id": 'SW1', "basin_name": "Kushiyara River (Amalshid)",
                     "forecast_date": formatted_date, "run_datetime": run_datetime,
-                    "dc_unit": "m³/s", "dl": "15.40", "pb_unit": "%", "forecast_type": "experimental"
+                    "dc_unit": "m³/s", "dl": "1800.00", "pb_unit": "%", "forecast_type": "experimental"
                 },
                 "data": {
                     "date": dates_list, "5%": p05, "25%": p25, "50%": p50, "75%": p75, "95%": p95

@@ -140,7 +140,7 @@ class Command(BaseCommand):
                     "forecast_date": formatted_date,
                     "run_datetime": run_datetime,
                     "dc_unit": "m³/s",
-                    "dl": "1840",
+                    "dl": "1600",
                     "pb_unit": "%",
                     "forecast_type": "experimental"
                 },
