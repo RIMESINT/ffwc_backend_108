@@ -3016,7 +3016,7 @@ def BMDWRFMonsoonFlashFlood(request, **kwargs):
     # Populate the "Threshold" object 
     threshold_dict = {}
     for i, threshold in enumerate(sorted(list(set(threshold_list)))):
-        threshold_dict[str(i)] = round(threshold, 0)
+        threshold_dict[str(i)] = round(threshold, 2)
 
     response_data["Threshold"] = threshold_dict
   
