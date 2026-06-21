@@ -1402,32 +1402,80 @@ class RecentObservedWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
         return JsonResponse(observed_values_dict, safe=False)
 
 
+# class WaterLevelByStationAndYearView(View):
+#     def get(self, request, **kwargs):
+#         station_id_str = kwargs['st_id']
+#         year = int(kwargs['year'])
+        
+  
+#         queryset = models.WaterLevelObservation.objects.filter(
+#             station_id__station_id=station_id_str, 
+#             observation_date__year=year
+#         ).order_by('observation_date')
+        
+#         queryset = queryset.filter(observation_date__month__range=[1, 13])
+        
+#         waterlevel_data = {
+#             str(year): [
+#                 {
+#                     'wl_date': record.observation_date.isoformat(),
+#                     'waterlevel': float(record.water_level)
+#                 }
+#                 for record in queryset
+#             ]
+#         }
+        
+#         return JsonResponse(waterlevel_data, safe=False)
+
 class WaterLevelByStationAndYearView(View):
     def get(self, request, **kwargs):
         station_id_str = kwargs['st_id']
         year = int(kwargs['year'])
         
+        # 1. Define date boundaries for the target year
+        start_date = datetime(year, 1, 1, 0, 0, 0)
+        end_date = datetime(year, 12, 31, 23, 59, 59, 999999)
   
+        # 2. Fetch sorted records
         queryset = models.WaterLevelObservation.objects.filter(
-            station_id__station_id=station_id_str, 
-            observation_date__year=year
+            station_id_id=station_id_str, 
+            observation_date__range=(start_date, end_date)
         ).order_by('observation_date')
         
-        queryset = queryset.filter(observation_date__month__range=[1, 13])
+        records = list(queryset)
+        total_records = len(records)
+        cleaned_data = []
         
+        # 3. Define a threshold for an unnatural jump (e.g., 10.0 meters)
+        # Water levels rarely rise or fall by 10+ meters in a 3-hour window
+        SPIKE_THRESHOLD = 10.0 
+
+        # 4. Loop through records and filter anomalies
+        for i, record in enumerate(records):
+            current_wl = float(record.water_level)
+            
+            # Only check records that have both a previous and a next neighbor
+            if 0 < i < total_records - 1:
+                prev_wl = float(records[i-1].water_level)
+                next_wl = float(records[i+1].water_level)
+                
+                # Check if the current value is a sudden spike relative to BOTH neighbors
+                if (abs(current_wl - prev_wl) > SPIKE_THRESHOLD) and (abs(current_wl - next_wl) > SPIKE_THRESHOLD):
+                    # Replace the anomaly with the average of its immediate neighbors
+                    current_wl = round((prev_wl + next_wl) / 2, 2)
+            
+            cleaned_data.append({
+                'wl_date': record.observation_date.isoformat(),
+                'waterlevel': current_wl
+            })
+        
+        # 5. Return the cleaned payload
         waterlevel_data = {
-            str(year): [
-                {
-                    'wl_date': record.observation_date.isoformat(),
-                    'waterlevel': float(record.water_level)
-                }
-                for record in queryset
-            ]
+            str(year): cleaned_data
         }
         
         return JsonResponse(waterlevel_data, safe=False)
-
-
+    
 class ObservedRainfallViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = serializers.ObservedRainfallSerializer
 
@@ -4064,10 +4112,6 @@ class monsoonConfigViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = models.MonsoonConfig.objects.all()
     serializer_class = serializers.MonsoonConfigSerializer
-    
-    
-    
-    
     
 
 """

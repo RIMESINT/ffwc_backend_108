@@ -14,7 +14,7 @@ from django.conf import settings
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
 
 class Command(BaseCommand):
-    help = 'Fetch Dalia ensemble forecast with nested fallback (New Path -> Old Path)'
+    help = 'Fetch Dalia ensemble forecast from the corrected Teesta auto path'
 
     def handle(self, *args, **options):
         # 1. Setup
@@ -26,8 +26,8 @@ class Command(BaseCommand):
         REMOTE_USER = 'mmb'
         REMOTE_PASS = 'mmb!@#$'
 
-        NEW_ROOT = '/home/mmb/Tank_All_Output/'
-        OLD_ROOT = '/home/mmb/tank-teesta-new-auto/corrected_output/csv/'
+        # Verified active path configuration
+        ACTIVE_ROOT = '/home/mmb/tank-teesta-new-auto/outputs_corrected/csv/'
         TARGET_FILE = 'all_en_corr_DALIA.csv'
         
         base_assets = os.path.join(settings.BASE_DIR, 'assets', 'flood-monitor-basin-forecast')
@@ -46,55 +46,52 @@ class Command(BaseCommand):
 
             remote_file_path = None
             final_date_folder = None
-            current_active_root = NEW_ROOT
 
-            # --- STEP 1: Try New Directory Structure ---
+            # --- Try Directory Lookups (Today -> Yesterday -> Fallback Scan) ---
             today_str = now.strftime('%Y%m%d')
             yesterday_str = (now - timedelta(days=1)).strftime('%Y%m%d')
             
             for folder in [today_str, yesterday_str]:
-                candidate = f"{NEW_ROOT}{folder}/{TARGET_FILE}"
+                candidate = f"{ACTIVE_ROOT}{folder}/{TARGET_FILE}"
                 try:
                     sftp.stat(candidate)
                     remote_file_path = candidate
                     final_date_folder = folder
-                    self.stdout.write(self.style.SUCCESS(f"--> Found in NEW directory: {folder}"))
+                    self.stdout.write(self.style.SUCCESS(f"--> Found active data folder: {folder}"))
                     break
                 except IOError:
                     continue
 
-            # --- STEP 2: Try Old Directory Structure (Fallback) ---
+            # Dynamic Fallback: if today/yesterday aren't generated yet, find the most recent folder dynamically
             if not remote_file_path:
-                self.stdout.write(self.style.WARNING("--> Not found in NEW root. Checking OLD directory..."))
+                self.stdout.write(self.style.WARNING("--> File not found for today/yesterday. Scanning directory history..."))
                 try:
-                    all_entries = sftp.listdir(OLD_ROOT)
-                    # Filter for YYYYMMDD folders and sort descending
+                    all_entries = sftp.listdir(ACTIVE_ROOT)
                     date_folders = sorted([f for f in all_entries if re.match(r'^\d{8}$', f)], reverse=True)
                     
-                    for folder in date_folders[:3]: # Check top 3 most recent
-                        candidate = f"{OLD_ROOT}{folder}/{TARGET_FILE}"
+                    for folder in date_folders[:3]:
+                        candidate = f"{ACTIVE_ROOT}{folder}/{TARGET_FILE}"
                         try:
                             sftp.stat(candidate)
                             remote_file_path = candidate
                             final_date_folder = folder
-                            current_active_root = OLD_ROOT
-                            self.stdout.write(self.style.SUCCESS(f"--> Found in OLD directory fallback: {folder}"))
+                            self.stdout.write(self.style.SUCCESS(f"--> Fallback found historical folder: {folder}"))
                             break
                         except IOError:
                             continue
                 except Exception as e:
-                    self.stdout.write(self.style.ERROR(f"--> Could not access OLD directory: {e}"))
+                    self.stdout.write(self.style.ERROR(f"--> Could not browse directory root: {e}"))
 
             if not remote_file_path:
-                raise Exception("Data not found in either NEW or OLD directory structures.")
+                raise Exception(f"Target file '{TARGET_FILE}' completely missing from paths under: {ACTIVE_ROOT}")
 
-            # 5. Download & Process
+            # 4. Download & Process Main CSV
             sftp.get(remote_file_path, temp_csv)
             df = pd.read_csv(temp_csv)
             time_col = 'Time' if 'Time' in df.columns else 'Date'
             df[time_col] = pd.to_datetime(df[time_col]).dt.tz_localize(None)
 
-            # Slicing from forecast date
+            # Slicing from forecast date onward
             f_start = pd.to_datetime(final_date_folder, format='%Y%m%d')
             df = df[df[time_col] >= f_start].copy()
 
@@ -108,11 +105,10 @@ class Command(BaseCommand):
             formatted_date = datetime.strptime(final_date_folder, "%Y%m%d").strftime("%Y-%m-%d")
             dates_list = df[time_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
 
-            # 7. Probability (data_pb)
+            # 5. Download & Process Probability File (data_pb)
             pb_dates, pb_values = [], []
-            pb_name = f"exceedence_{final_date_folder}_dalia.csv"
-            # Use the root where the main file was found
-            remote_pb_file = f"{current_active_root}{final_date_folder}/{pb_name}"
+            pb_name = f"exceedence{final_date_folder}.csv"
+            remote_pb_file = f"{ACTIVE_ROOT}{final_date_folder}/{pb_name}"
 
             try:
                 sftp.get(remote_pb_file, temp_pb_csv)
@@ -120,14 +116,15 @@ class Command(BaseCommand):
                 if 'ex_pr' in df_pb.columns:
                     pb_values = df_pb['ex_pr'].tolist()
                     pb_dates = pd.to_datetime(df_pb['date']).dt.strftime('%Y-%m-%d').tolist() if 'date' in df_pb.columns else [d.split(' ')[0] for d in dates_list[:len(pb_values)]]
-            except:
-                self.stdout.write(self.style.WARNING("--> Probability file not found in selected root."))
+                self.stdout.write(self.style.SUCCESS("--> Probability file successfully loaded."))
+            except Exception as pb_err:
+                self.stdout.write(self.style.WARNING(f"--> Probability file processing skipped or not found: {pb_err}"))
 
             sftp.close(); ssh.close()
 
-            # 8. Save JSON
+            # 6. Save Formatted JSON Output
             output_data = {
-                "code": "success", "message": f"Fetched from {current_active_root}",
+                "code": "success", "message": f"Fetched from {ACTIVE_ROOT}",
                 "metadata": {
                     "station_id": 'SW291.5R', "basin_name": "Teesta River (Dalia)",
                     "forecast_date": formatted_date, "run_datetime": run_datetime,
