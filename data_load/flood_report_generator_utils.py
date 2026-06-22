@@ -839,3 +839,6 @@ def generate_flood_summary_data(target_date_str_unused=None):
     processing_duration = time.time() - start_generation_time
     print(f"Flood summary generation for {current_day_str} completed in {processing_duration:.2f} seconds.")
     return response_data
+
+
+fetch_core_datasets = fetch_core_datasets_direct

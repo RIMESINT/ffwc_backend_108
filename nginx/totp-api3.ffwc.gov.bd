@@ -1,0 +1,15 @@
+location / {
+    include proxy_params;
+    proxy_pass http://unix:/home/rimes/ffwc-rebase/backend/ffwc_django_project/ffwc_django_project.sock;
+    
+    # Pass the internal key from the browser to Django
+    proxy_set_header x-ffwc-internal-key $http_x_ffwc_internal_key;
+    
+    # Pass the Referer for the Domain Lock logic
+    proxy_set_header Referer $http_referer;
+}
+
+
+
+Global Config: /etc/nginx/nginx.conf
+underscores_in_headers on;

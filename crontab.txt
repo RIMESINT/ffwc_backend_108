@@ -1,0 +1,1 @@
+sudo crontab /home/rimes/ffwc-rebase/backend/ffwc_django_project/crontab.conf

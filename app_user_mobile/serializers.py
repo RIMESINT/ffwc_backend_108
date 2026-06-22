@@ -124,3 +124,43 @@ class FCMTokenLocationSerializer(serializers.ModelSerializer):
         if not value:
             raise serializers.ValidationError("FCM token is required")
         return value
+
+
+
+# Add to app_user_mobile/serializers.py
+
+
+class WaterLevelDataPointSerializer(serializers.Serializer):
+    datetime = serializers.CharField(help_text="Format: DD-MM-YYYY HH:MM:SS")
+    value = serializers.FloatField()
+
+class VendorWLPushSerializer(serializers.Serializer):
+    station_code = serializers.CharField(max_length=20)
+    from_date = serializers.DateField()
+    to_date = serializers.DateField()
+    mode = serializers.ChoiceField(choices=['update', 'fill_missing'], default='fill_missing')
+    data = WaterLevelDataPointSerializer(many=True)
+
+class WaterLevelEntrySerializer(serializers.Serializer):
+    # These fields match the keys inside your "data" list
+    station_id = serializers.CharField()
+    datetime = serializers.CharField()
+    value = serializers.FloatField()
+    unit = serializers.CharField(required=False, allow_blank=True)
+
+class VendorBulkPushSerializer(serializers.Serializer):
+    # This matches the top-level structure
+    mode = serializers.ChoiceField(choices=['update', 'fill_missing'], default='fill_missing')
+    data = WaterLevelEntrySerializer(many=True)
+
+    
+# class WaterLevelEntrySerializer(serializers.Serializer):
+#     station_id = serializers.CharField()
+#     datetime = serializers.CharField()
+#     value = serializers.FloatField()
+#     unit = serializers.CharField(required=False)
+
+# class VendorBulkPushSerializer(serializers.Serializer):
+#     # This matches the top-level {"data": [...]} structure
+#     data = WaterLevelEntrySerializer(many=True)
+#     mode = serializers.ChoiceField(choices=['update', 'fill_missing'], default='fill_missing')

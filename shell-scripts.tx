@@ -1,0 +1,4 @@
+
+nohup python3 compute_mswep_regional_climatology.py > climo_log.txt &
+grep "Failed to process" climo_log.txt | awk '{print $5}' | sed 's/://' > failed_files.txt
+pkill -f compute_mswep_regional_climatology.py

@@ -16,6 +16,7 @@ from rest_framework.decorators import api_view,action
 from django.views.decorators.http import require_GET
 
 from . import models as models
+from data_load import models as data_load_models
 from . import serializers as serializers  # Import serializers module as 'serializer'
 from datetime import datetime,timedelta,time
 from collections import defaultdict
@@ -36,6 +37,10 @@ from django.db.models import Avg
 from django.db.models import Subquery, OuterRef, F, Case, When, Value, FloatField, CharField
 from django.db.models.functions import Coalesce
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+
+from collections import OrderedDict
 import pandas as pd
 
 from django.views.decorators.http import require_http_methods
@@ -379,7 +384,7 @@ class ObservedWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
         # If still no data, fetch last 30 days for all valid stations
         if not queryset.exists():
             queryset =models.WaterLevelObservation.objects.filter(
-                observation_date__gte=entry_date_time - timedelta(days=60),
+                observation_date__gte=entry_date_time - timedelta(days=10),
                 station_id__isnull=False
             ).order_by('station_id__station_serial_no', '-observation_date').distinct()
             # ).order_by('station_id__station_id', '-observation_date').distinct()
@@ -429,28 +434,32 @@ class ObservedWaterlevelByStationAndDateViewSet(viewsets.ReadOnlyModelViewSet):
 
     def list(self, request, station_id=None, date=None, *args, **kwargs):
         try:
-            # Parse the date parameter (YYYY-MM-DD)
+            # 1. Parse the date parameter (YYYY-MM-DD)
             try:
-                start_date = datetime.strptime(date, '%Y-%m-%d').date()
-                start_datetime = datetime.combine(start_date, datetime.min.time())
-                end_datetime = start_datetime + timedelta(days=1)
+                target_date = datetime.strptime(date, '%Y-%m-%d').date()
+                # Create the upper bound (end of the target day, e.g., 23:59:59)
+                end_datetime = datetime.combine(target_date, time.max)
+                # Create the lower bound (40 days before the start of the target day)
+                start_datetime = datetime.combine(target_date, time.min) - timedelta(days=40)
             except ValueError:
                 return JsonResponse({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
 
-            # Query for the specified station and date range
+            # 2. Query for the specified station and the 40-day date range
             queryset = models.WaterLevelObservation.objects.filter(
                 station_id__station_id=station_id,
                 station_id__isnull=False,
                 station_id__station_id__in=models.Station.objects.values('station_id'),
-                observation_date__gte=start_datetime-timedelta(days=40),
-                observation_date__lte=end_datetime-timedelta(days=0)
+                observation_date__gte=start_datetime,
+                observation_date__lte=end_datetime
             ).order_by('-observation_date')
 
-            # Serialize the data
+            # 3. Serialize the data
             serializer = self.get_serializer(queryset, many=True)
+            
             # Filter out None entries (invalid stations)
             response_data = [entry for entry in serializer.data if entry]
             return JsonResponse(response_data, safe=False)
+            
         except models.Station.DoesNotExist:
             return JsonResponse([], safe=False)  # Return empty list if station doesn't exist
         except Exception as e:
@@ -1047,6 +1056,9 @@ class AfternoonWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
 
         return JsonResponse(waterlevel_dict, safe=False)
 
+from datetime import timedelta
+from django.db.models import Max
+
 class WaterLevelObservationExperimentalsView(APIView):
     def get(self, request, **kwargs):
         station_id = kwargs.get('st_id')
@@ -1057,25 +1069,69 @@ class WaterLevelObservationExperimentalsView(APIView):
         logger.info(f"Processing experimental observation water levels for station: {station_id}")
         
         try:
-            if not models.WaterLevelObservationExperimentals.objects.filter(station_id__station_id=station_id).exists():
-                logger.info(f"No experimental observations found for station: {station_id}")
-                return Response([], status=status.HTTP_200_OK) # Return empty array if no data
-            
-            # Query observation data for the given station, ordered by date
-            queryset = models.WaterLevelObservationExperimentals.objects.filter(
+            # 1. Base queryset filtered by station
+            base_queryset = models.WaterLevelObservationExperimentals.objects.filter(
                 station_id__station_id=station_id
-            ).order_by('observation_date') # <<<--- CHANGED THIS LINE
+            )
+
+            if not base_queryset.exists():
+                logger.info(f"No experimental observations found for station: {station_id}")
+                return Response([], status=status.HTTP_200_OK)
+            
+            # 2. Find the latest available observation date in the dataset
+            latest_date_dict = base_queryset.aggregate(max_date=Max('observation_date'))
+            latest_date = latest_date_dict['max_date']
+            
+            # 3. Calculate the date 10 days prior to the latest date
+            ten_days_ago = latest_date - timedelta(days=10)
+            
+            # 4. Filter queryset to include only the last 10 days of data
+            queryset = base_queryset.filter(
+                observation_date__gte=ten_days_ago
+            ).order_by('observation_date') 
             
             serializer = serializers.WaterLevelObservationExperimentalsSerializer(queryset, many=True)
             return Response(serializer.data, status=status.HTTP_200_OK)
         
         except models.Station.DoesNotExist: 
- 
             logger.error(f"Station with ID {station_id} does not exist in the Station model or related data.")
             return Response({"error": f"Station with ID {station_id} not found."}, status=status.HTTP_404_NOT_FOUND)
         except Exception as e:
             logger.error(f"Error processing observation request for station {station_id}: {str(e)}", exc_info=True)
             return Response({"error": "An unexpected error occurred. Please try again later."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+# class WaterLevelObservationExperimentalsView(APIView):
+#     def get(self, request, **kwargs):
+#         station_id = kwargs.get('st_id')
+#         if not station_id:
+#             logger.error("Station ID is required for WaterLevelObservationExperimentalsView")
+#             return Response({"error": "Station ID is required"}, status=status.HTTP_400_BAD_REQUEST)
+        
+#         logger.info(f"Processing experimental observation water levels for station: {station_id}")
+        
+#         try:
+#             if not models.WaterLevelObservationExperimentals.objects.filter(station_id__station_id=station_id).exists():
+#                 logger.info(f"No experimental observations found for station: {station_id}")
+#                 return Response([], status=status.HTTP_200_OK) # Return empty array if no data
+            
+#             # Query observation data for the given station, ordered by date
+#             queryset = models.WaterLevelObservationExperimentals.objects.filter(
+#                 station_id__station_id=station_id
+#             ).order_by('observation_date') 
+            
+#             serializer = serializers.WaterLevelObservationExperimentalsSerializer(queryset, many=True)
+#             return Response(serializer.data, status=status.HTTP_200_OK)
+        
+#         except models.Station.DoesNotExist: 
+ 
+#             logger.error(f"Station with ID {station_id} does not exist in the Station model or related data.")
+#             return Response({"error": f"Station with ID {station_id} not found."}, status=status.HTTP_404_NOT_FOUND)
+#         except Exception as e:
+#             logger.error(f"Error processing observation request for station {station_id}: {str(e)}", exc_info=True)
+#             return Response({"error": "An unexpected error occurred. Please try again later."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
+
 
 class HistoricalWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
     """
@@ -1328,11 +1384,13 @@ class RecentObservedWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
         except models.WaterLevelObservation.DoesNotExist:
             return JsonResponse({}, safe=False)
 
-        one_day_ago = entry_date_time - timedelta(days=60)
+        # one_day_ago = entry_date_time - timedelta(days=360)
+        one_day_ago = entry_date_time - timedelta(days=10)
         observed_values_dict = defaultdict(list)
 
         observations = models.WaterLevelObservation.objects.filter(
-            observation_date__gte=one_day_ago
+            observation_date__gte=one_day_ago,
+            station_id__status=True
         ).values('station_id', 'observation_date', 'water_level').order_by('station_id', 'observation_date')
 
         for result in observations:
@@ -1344,34 +1402,80 @@ class RecentObservedWaterlevelViewSet(viewsets.ReadOnlyModelViewSet):
         return JsonResponse(observed_values_dict, safe=False)
 
 
+# class WaterLevelByStationAndYearView(View):
+#     def get(self, request, **kwargs):
+#         station_id_str = kwargs['st_id']
+#         year = int(kwargs['year'])
+        
+  
+#         queryset = models.WaterLevelObservation.objects.filter(
+#             station_id__station_id=station_id_str, 
+#             observation_date__year=year
+#         ).order_by('observation_date')
+        
+#         queryset = queryset.filter(observation_date__month__range=[1, 13])
+        
+#         waterlevel_data = {
+#             str(year): [
+#                 {
+#                     'wl_date': record.observation_date.isoformat(),
+#                     'waterlevel': float(record.water_level)
+#                 }
+#                 for record in queryset
+#             ]
+#         }
+        
+#         return JsonResponse(waterlevel_data, safe=False)
 
 class WaterLevelByStationAndYearView(View):
     def get(self, request, **kwargs):
         station_id_str = kwargs['st_id']
         year = int(kwargs['year'])
         
-        # The logic is simplified as both conditions
-        # for 'current_year' and 'other years' are identical.
+        # 1. Define date boundaries for the target year
+        start_date = datetime(year, 1, 1, 0, 0, 0)
+        end_date = datetime(year, 12, 31, 23, 59, 59, 999999)
+  
+        # 2. Fetch sorted records
         queryset = models.WaterLevelObservation.objects.filter(
-            station_id__station_id=station_id_str, # Using ForeignKey to filter by 'station_id'
-            observation_date__year=year
+            station_id_id=station_id_str, 
+            observation_date__range=(start_date, end_date)
         ).order_by('observation_date')
         
-        queryset = queryset.filter(observation_date__month__range=[5, 10])
+        records = list(queryset)
+        total_records = len(records)
+        cleaned_data = []
         
+        # 3. Define a threshold for an unnatural jump (e.g., 10.0 meters)
+        # Water levels rarely rise or fall by 10+ meters in a 3-hour window
+        SPIKE_THRESHOLD = 10.0 
+
+        # 4. Loop through records and filter anomalies
+        for i, record in enumerate(records):
+            current_wl = float(record.water_level)
+            
+            # Only check records that have both a previous and a next neighbor
+            if 0 < i < total_records - 1:
+                prev_wl = float(records[i-1].water_level)
+                next_wl = float(records[i+1].water_level)
+                
+                # Check if the current value is a sudden spike relative to BOTH neighbors
+                if (abs(current_wl - prev_wl) > SPIKE_THRESHOLD) and (abs(current_wl - next_wl) > SPIKE_THRESHOLD):
+                    # Replace the anomaly with the average of its immediate neighbors
+                    current_wl = round((prev_wl + next_wl) / 2, 2)
+            
+            cleaned_data.append({
+                'wl_date': record.observation_date.isoformat(),
+                'waterlevel': current_wl
+            })
+        
+        # 5. Return the cleaned payload
         waterlevel_data = {
-            str(year): [
-                {
-                    'wl_date': record.observation_date.isoformat(),
-                    'waterlevel': float(record.water_level)
-                }
-                for record in queryset
-            ]
+            str(year): cleaned_data
         }
         
         return JsonResponse(waterlevel_data, safe=False)
-
-
+    
 class ObservedRainfallViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = serializers.ObservedRainfallSerializer
 
@@ -1430,25 +1534,63 @@ class ObservedRainfallViewSet(viewsets.ReadOnlyModelViewSet):
         
     #     return Response(serializer.data)
 
-    def fourty_days_rainfall_by_station_and_date(self, request, station_id, start_date):
-        print(' . . In new Rainfall by Station And Date . . ')
+    # def fourty_days_rainfall_by_station_and_date(self, request, station_id, start_date):
+    #     print(' . . In new Rainfall by Station And Date . . ')
         
-        # Parse the start date and calculate the date 40 days prior
-        start_datetime = datetime.strptime(start_date, "%Y-%m-%d")+ timedelta(days=1)
-        previous_date_before_forty_days = start_datetime - timedelta(days=40)
+    #     # Parse the start date and calculate the date 40 days prior
+    #     start_datetime = datetime.strptime(start_date, "%Y-%m-%d")+ timedelta(days=1)
+    #     previous_date_before_forty_days = start_datetime - timedelta(days=40)
         
-        print('Start Date Time for Query..', start_datetime)
-        print('Previous Date Before 40 Days..', previous_date_before_forty_days)
+    #     print('Start Date Time for Query..', start_datetime)
+    #     print('Previous Date Before 40 Days..', previous_date_before_forty_days)
 
-        # Filter the queryset
+    #     # Filter the queryset
+    #     queryset = models.RainfallObservation.objects.filter(
+    #         station_id=station_id,
+    #         observation_date__gte=previous_date_before_forty_days,
+    #         observation_date__lte=start_datetime
+    #     )
+        
+    #     # Serialize the data
+    #     serializer = serializers.FourtyDaysRainfallObservationSerializer(queryset, many=True)
+        
+    #     return Response(serializer.data)
+
+    def fourty_days_rainfall_by_station_and_date(self, request, station_id, start_date):
+        # 1. Date Range Calculation
+        start_datetime = datetime.strptime(start_date, "%Y-%m-%d") + timedelta(days=1)
+        previous_date_before_forty_days = start_datetime - timedelta(days=40)
+
+        # 2. Fetch both 06:00 and 09:00 records
+        # Using __time__in to get both candidate timestamps in one query
         queryset = models.RainfallObservation.objects.filter(
             station_id=station_id,
             observation_date__gte=previous_date_before_forty_days,
-            observation_date__lte=start_datetime
-        )
-        
-        # Serialize the data
-        serializer = serializers.FourtyDaysRainfallObservationSerializer(queryset, many=True)
+            observation_date__lte=start_datetime,
+            observation_date__time__in=[time(6, 0, 0), time(9, 0, 0)]
+        ).order_by('observation_date') # Order by date/time ascending
+
+        # 3. Priority Logic: Filter for one record per date
+        # We use a dictionary where the key is the date (YYYY-MM-DD)
+        daily_data_map = OrderedDict()
+
+        for record in queryset:
+            # Get just the date part of the timestamp
+            obs_date_only = record.observation_date.date()
+            obs_time_only = record.observation_date.time()
+
+            if obs_date_only not in daily_data_map:
+                # First time seeing this date, take whatever we found (6 or 9)
+                daily_data_map[obs_date_only] = record
+            else:
+                # We already have a record for this date. 
+                # If the current one is 06:00, it replaces the existing one (the 09:00 fallback).
+                if obs_time_only == time(6, 0, 0):
+                    daily_data_map[obs_date_only] = record
+
+        # 4. Serialize the filtered values
+        filtered_queryset = list(daily_data_map.values())
+        serializer = serializers.FourtyDaysRainfallObservationSerializer(filtered_queryset, many=True)
         
         return Response(serializer.data)
 
@@ -1610,35 +1752,62 @@ class ThreeDaysObservedRainfallViewSet(viewsets.ReadOnlyModelViewSet):
 
 
 
-class RainfallByStationViewSet(viewsets.ReadOnlyModelViewSet):
+# class RainfallByStationViewSet(viewsets.ReadOnlyModelViewSet):
 
+#     serializer_class = serializers.ThreeDaysObservedRainfallSerializer
+
+#     def list(self, request, station_id=None, *args, **kwargs):
+#         # Get the latest observation date for filtering
+#         latest_entry = models.RainfallObservation.objects.latest('observation_date')
+#         latest_entry_date_time = latest_entry.observation_date
+
+#         # Query for the last 40 days of data for the specified station_id
+#         queryset = models.RainfallObservation.objects.filter(
+#             station_id=station_id,
+#             observation_date__gte=latest_entry_date_time - timedelta(days=40)
+#         ).order_by('-observation_date')
+
+#         # Serialize the data
+#         serializer = self.get_serializer(queryset, many=True)
+#         response_data = [
+#             {
+#                 "st_id": entry["station_id"],
+#                 "rf_date": entry["observation_date"],
+#                 "rainfall": f"{float(entry['rainfall']):.2f}"
+#             }
+#             for entry in serializer.data
+#         ]
+
+#         return JsonResponse(response_data, safe=False)
+
+class RainfallByStationViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = serializers.ThreeDaysObservedRainfallSerializer
 
     def list(self, request, station_id=None, *args, **kwargs):
-        # Get the latest observation date for filtering
+        # 1. Get the latest observation date for filtering
         latest_entry = models.RainfallObservation.objects.latest('observation_date')
         latest_entry_date_time = latest_entry.observation_date
 
-        # Query for the last 30 days of data for the specified station_id
+        # 2. Query for the last 40 days of data for the specified station_id
         queryset = models.RainfallObservation.objects.filter(
             station_id=station_id,
-            observation_date__gte=latest_entry_date_time - timedelta(days=30)
+            observation_date__gte=latest_entry_date_time - timedelta(days=40)
         ).order_by('-observation_date')
 
-        # Serialize the data
+        # 3. Serialize the data
         serializer = self.get_serializer(queryset, many=True)
+        
+        # 4. Map directly without extra date parsing overhead
         response_data = [
             {
                 "st_id": entry["station_id"],
-                "rf_date": entry["observation_date"],
+                "rf_date": entry["observation_date"],  # This is already a formatted string now!
                 "rainfall": f"{float(entry['rainfall']):.2f}"
             }
             for entry in serializer.data
         ]
 
         return JsonResponse(response_data, safe=False)
-
-
 def get_experimental_stations(request):
     stations = models.Station.objects.filter(experimental=True).order_by('station_id').annotate(
         json_id=F('station_id') 
@@ -2749,6 +2918,7 @@ def district_flood_alerts_forecast_by_date(request, date):
 #     return Response(result)
 
 
+# Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast
 
 @api_view(['GET'])
 def MonsoonFlashFlood(request,**kwargs):
@@ -2756,14 +2926,14 @@ def MonsoonFlashFlood(request,**kwargs):
     forecast_date = kwargs['forecast_date']
     basin_id = kwargs['basin_id']
 
-    latest_record = models.MonsoonBasinWiseFlashFloodForecast.objects.latest('prediction_date')
+    latest_record = models.Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.latest('prediction_date')
     latest_date = latest_record.prediction_date  # Access the date field
 
-    first_query =  models.MonsoonBasinWiseFlashFloodForecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+    first_query =  models.Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
     
     if not first_query.exists():
         forecast_date = latest_date
-        second_query =  models.MonsoonBasinWiseFlashFloodForecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+        second_query =  models.Ecmwf_Monsoon_Basin_Wise_Flash_Flood_Forecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
         forecasts = second_query
     else:
         forecasts = first_query
@@ -2894,7 +3064,7 @@ def BMDWRFMonsoonFlashFlood(request, **kwargs):
     # Populate the "Threshold" object 
     threshold_dict = {}
     for i, threshold in enumerate(sorted(list(set(threshold_list)))):
-        threshold_dict[str(i)] = round(threshold, 0)
+        threshold_dict[str(i)] = round(threshold, 2)
 
     response_data["Threshold"] = threshold_dict
   
@@ -2905,9 +3075,171 @@ def BMDWRFMonsoonFlashFlood(request, **kwargs):
 
     return Response(response_data)
 
+@api_view(['GET'])
+def BMDWRFPreMonsoonFlashFlood(request, **kwargs):
 
+    requested_forecast_date_str = kwargs.get('forecast_date')
+    requested_basin_id = kwargs.get('basin_id')
 
+    restricted_basins = [10, 11]
 
+    if requested_basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
+    
+    try:
+        target_prediction_dt = datetime.strptime(requested_forecast_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+    # 2. Query Data with Fallback Logic
+    forecast_query = models.BMDWRFPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+        prediction_date=target_prediction_dt, 
+        basin_id=requested_basin_id
+    ).order_by('date', 'hours')
+
+    # If specific run doesn't exist, we fallback but maintain the start-date logic
+    actual_run_date_str = requested_forecast_date_str
+    if not forecast_query.exists():
+        latest_record = models.BMDWRFPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+            basin_id=requested_basin_id
+        ).order_by('-prediction_date').first()
+        
+        if latest_record:
+            target_prediction_dt = latest_record.prediction_date
+            actual_run_date_str = target_prediction_dt.strftime("%Y-%m-%d")
+            forecast_query = models.BMDWRFPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+                prediction_date=target_prediction_dt, 
+                basin_id=requested_basin_id
+            ).order_by('date', 'hours')
+    
+    if not forecast_query.exists():
+        return Response({"error": "No Pre-Monsoon data found."}, status=404)
+
+    # 3. Define Response Structure with Smart Mapping
+    # Ensures 24h is always "0", 48h is always "1", etc.
+    hour_to_idx = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    
+    response_data = {
+        "Hours": { "0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240 },
+        "Threshold": {},
+    }
+
+    # Use a nested dict to store values: { "date": { "0": val, "1": val } }
+    date_value_dict = defaultdict(dict)
+    threshold_map = {}
+
+    # 4. Populate Data from DB
+    for f in forecast_query:
+        d_str = f.date.strftime("%Y-%m-%d")
+        idx = hour_to_idx.get(f.hours)
+        
+        if idx:
+            date_value_dict[d_str][idx] = round(f.value, 2)
+            if idx not in threshold_map:
+                threshold_map[idx] = round(f.thresholds, 2)
+
+    # --- 5. THE DAY 1 INJECTOR ---
+    # Forces the "Run Date" (Day 1) into the response as the starting point.
+    if actual_run_date_str not in date_value_dict:
+        date_value_dict[actual_run_date_str] = {str(i): 0.0 for i in range(6)}
+    else:
+        # Fill any missing indices for Today with 0.0
+        for i in range(6):
+            if str(i) not in date_value_dict[actual_run_date_str]:
+                date_value_dict[actual_run_date_str][str(i)] = 0.0
+
+    # 6. Final Construction & Chronological Sorting
+    response_data["Threshold"] = threshold_map
+    
+    # Sort dates and ensure every date has all 6 indices to prevent frontend crashes
+    for key in sorted(date_value_dict.keys()):
+        current_date_data = date_value_dict[key]
+        full_indices = {str(i): current_date_data.get(str(i), 0.0) for i in range(6)}
+        response_data[key] = full_indices
+
+    return Response(response_data)
+# @api_view(['GET'])
+# def BMDWRFPreMonsoonFlashFlood(request, **kwargs):
+#     """
+#     Retrieves BMD WRF Pre-Monsoon flash flood forecast data.
+#     Now targets the specific 'BMDWRFPreMonsoonBasinWiseFlashFloodForecast' model.
+#     """
+#     requested_forecast_date_str = kwargs.get('forecast_date')
+#     requested_basin_id = kwargs.get('basin_id')
+    
+#     # 1. Date Parsing
+#     try:
+#         requested_date = datetime.strptime(requested_forecast_date_str, '%Y-%m-%d').date()
+#     except ValueError:
+#         return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+#     # 2. Query Data with Fallback Logic
+#     # Targeting the new Pre-Monsoon specific table
+#     forecast_query = models.BMDWRFPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+#         prediction_date=requested_date, 
+#         basin_id=requested_basin_id
+#     ).order_by('date', 'hours')
+
+#     if not forecast_query.exists():
+#         # Fallback: Get the latest run for this basin
+#         latest_record = models.BMDWRFPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+#             basin_id=requested_basin_id
+#         ).order_by('-prediction_date').first()
+        
+#         if latest_record:
+#             requested_date = latest_record.prediction_date
+#             forecast_query = models.BMDWRFPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+#                 prediction_date=requested_date, 
+#                 basin_id=requested_basin_id
+#             ).order_by('date', 'hours')
+    
+#     if not forecast_query.exists():
+#         return Response({"error": "No Pre-Monsoon data found."}, status=404)
+
+#     # 3. Restructure Data with Smart Indexing
+#     # This ensures 24h is always index 0, 48h is index 1, etc.
+#     hour_to_idx = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    
+#     response_data = {
+#         "Hours": { "0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240 },
+#         "Threshold": {}, # Singular key as requested
+#     }
+
+#     # Temporary storage for date-wise results
+#     # Initialize with 0.0 to handle missing records gracefully
+#     date_results = defaultdict(lambda: {str(i): 0.0 for i in range(6)})
+#     threshold_map = {}
+
+#     for forecast in forecast_query:
+#         d_str = forecast.date.strftime("%Y-%m-%d")
+#         h_val = forecast.hours
+        
+#         if h_val in hour_to_idx:
+#             idx = hour_to_idx[h_val]
+#             date_results[d_str][idx] = round(forecast.value, 2)
+            
+#             # Map thresholds to the same index
+#             if idx not in threshold_map:
+#                 threshold_map[idx] = round(forecast.thresholds, 2)
+
+#     # 4. Inject "Run Date" (Today) if it's missing from the forecast list
+#     # Ensures the chart doesn't start with a gap
+#     run_date_str = requested_date.strftime("%Y-%m-%d")
+#     if run_date_str not in date_results:
+#         date_results[run_date_str] = {str(i): 0.0 for i in range(6)}
+
+#     # 5. Build Final Response
+#     response_data["Threshold"] = threshold_map
+    
+#     # Sort the dates so the Run Date appears first
+#     for date_key in sorted(date_results.keys()):
+#         response_data[date_key] = date_results[date_key]
+
+#     return Response(response_data)
+    
 @api_view(['GET'])
 def UkMetMonsoonFlashFlood(request,**kwargs):
 
@@ -2962,55 +3294,463 @@ def UkMetMonsoonFlashFlood(request,**kwargs):
     return Response(response_data)
 
 @api_view(['GET'])
-def MonsoonProbabilisticFlashFlood(request,**kwargs):
-
-    forecast_date = kwargs['givenDate']
+def UkMetPreMonsoonFlashFlood(request, **kwargs):
+    # 1. Capture and parse the requested date from the URL
+    requested_date_str = kwargs['forecast_date'] 
     basin_id = kwargs['basin_id']
 
-    latest_record = models.MonsoonProbabilisticFlashFloodForecast.objects.latest('prediction_date')
-    latest_date = latest_record.prediction_date  # Access the date field
+    restricted_basins = [10, 11]
 
-    first_query =  models.MonsoonProbabilisticFlashFloodForecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
+
+    try:
+        target_prediction_dt = datetime.strptime(requested_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+    # 2. Query data for the requested run date
+    forecast_query = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+        prediction_date=target_prediction_dt, 
+        basin_id=basin_id
+    ).order_by('date', 'hours')
     
-    if not first_query.exists():
-        forecast_date = latest_date
-        second_query =  models.MonsoonProbabilisticFlashFloodForecast.objects.filter(prediction_date=forecast_date, basin_id=basin_id)
-        forecasts = second_query
-    else:
-        forecasts = first_query
+    # Fallback logic: If URL date is empty in DB, find the latest available run
+    actual_run_date_str = requested_date_str
+    if not forecast_query.exists():
+        try:
+            latest_record = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.latest('prediction_date')
+            target_prediction_dt = latest_record.prediction_date
+            actual_run_date_str = target_prediction_dt.strftime("%Y-%m-%d")
+            forecast_query = models.UKMetPreMonsoonBasinWiseFlashFloodForecast.objects.filter(
+                prediction_date=target_prediction_dt, 
+                basin_id=basin_id
+            ).order_by('date', 'hours')
+        except models.UKMetPreMonsoonBasinWiseFlashFloodForecast.DoesNotExist:
+            return Response({"error": "No Pre-Monsoon data found in database."}, status=404)
 
-
-    # Initialize the response structure
+    # 3. Define the Hour-to-Index Map
+    # Ensures that even if DB rows are interleaved, the output columns stay fixed
+    hour_to_idx = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    
     response_data = {
-
-        "Hours": {
-            "0": 24,
-            "1": 48,
-            "2": 72,
-            "3": 120,
-            "4": 168,
-            "5": 240
-        },
-
-        "Thresholds": defaultdict(float),
+        "Hours": { "0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240 },
+        "Threshold": {},
     }
 
-    threshold_list=[]
+    # date_value_dict stores indices to values: {"2026-03-25": {"0": 2.03, "1": 2.03...}}
+    date_value_dict = defaultdict(dict)
+    threshold_map = {}
 
-    date_value_dict = defaultdict(list)
-    # Populate the response data with values from the database
-    for forecast in forecasts:
-        threshold_list.append(round(forecast.thresholds,2))
-        date_value_dict[forecast.date].append(round(forecast.value,2))
- 
-    # Convert defaultdict to regular dict
-    threshold_dict={}
-    for i,threshold in enumerate(sorted(set(threshold_list))):threshold_dict[str(i)]=threshold
-    response_data["Thresholds"] = threshold_dict
+    # 4. Populate Data from Database
+    for f in forecast_query:
+        d_str = f.date.strftime("%Y-%m-%d")
+        idx = hour_to_idx.get(f.hours)
+        
+        if idx:
+            date_value_dict[d_str][idx] = round(f.value, 2)
+            # Legally map the threshold for this hour index
+            if idx not in threshold_map:
+                threshold_map[idx] = round(f.thresholds, 2)
+
+    # --- 5. THE DAY 1 INJECTOR ---
+    # Ensure the 'Run Date' (prediction_date) always exists as the starting point.
+    if actual_run_date_str not in date_value_dict:
+        date_value_dict[actual_run_date_str] = {str(i): 0.0 for i in range(6)}
+    else:
+        # If today exists but is missing some hours, fill gaps with 0.0
+        for i in range(6):
+            if str(i) not in date_value_dict[actual_run_date_str]:
+                date_value_dict[actual_run_date_str][str(i)] = 0.0
+
+    # 6. Final Construction & Chronological Sorting
+    response_data["Threshold"] = threshold_map
   
-    for key in list(date_value_dict.keys())[:-1]:
+    # Sort keys ensures the Run Date comes first
+    for key in sorted(date_value_dict.keys()):
+        current_date_data = date_value_dict[key]
+        # Guarantee every date object has all 6 index keys (0-5)
+        full_indices = {str(i): current_date_data.get(str(i), 0.0) for i in range(6)}
+        response_data[key] = full_indices
+
+    return Response(response_data)
+
+
+@api_view(['GET'])
+def NewFlashFlood(request, **kwargs):
+    requested_date_str = kwargs['forecast_date'] 
+    basin_id = kwargs['basin_id']
+
+    restricted_basins = [10, 11]
+
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
+
+    # 1. Query the NEW model
+    target_model = data_load_models.Ecmwf_Pre_Monsoon_Basin_Wise_Flash_Flood_Forecast
+    
+    forecasts = target_model.objects.filter(
+        prediction_date=requested_date_str, 
+        basin_id=basin_id
+    ).order_by('date', 'hours')
+    
+    actual_run_date_str = requested_date_str
+    if not forecasts.exists():
+        try:
+            latest_record = target_model.objects.latest('prediction_date')
+            actual_run_date_str = latest_record.prediction_date.strftime("%Y-%m-%d")
+            forecasts = target_model.objects.filter(
+                prediction_date=actual_run_date_str, 
+                basin_id=basin_id
+            ).order_by('date', 'hours')
+        except target_model.DoesNotExist:
+            return Response({"error": "No forecast data found."}, status=404)
+
+    # 2. Response Formatting (Logic remains the same, querying from new model)
+    hour_to_idx = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    
+    response_data = {
+        "Hours": { "0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240 },
+        "Threshold": {},
+    }
+
+    date_value_dict = defaultdict(dict)
+    threshold_map = {}
+
+    for f in forecasts:
+        d_str = f.date.strftime("%Y-%m-%d")
+        idx = hour_to_idx.get(f.hours)
+        
+        if idx:
+            date_value_dict[d_str][idx] = round(f.value, 2)
+            if idx not in threshold_map:
+                threshold_map[idx] = round(f.thresholds, 2)
+
+    if actual_run_date_str not in date_value_dict:
+        date_value_dict[actual_run_date_str] = {str(i): 0.0 for i in range(6)}
+    
+    response_data["Threshold"] = threshold_map
+  
+    for key in sorted(date_value_dict.keys()):
+        current_date_data = date_value_dict[key]
+        full_indices = {str(i): current_date_data.get(str(i), 0.0) for i in range(6)}
+        response_data[key] = full_indices
+
+    return Response(response_data)
+
+@api_view(['GET'])
+def NewProbabilisticFlashFlood(request, **kwargs):
+    forecast_date = kwargs['givenDate']
+    basin_id = kwargs['basin_id']
+    
+    restricted_basins = [10, 11]
+
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
+
+    # Use the new model
+    target_model = data_load_models.Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast
+    
+    today = timezone.now().date()
+    ten_days_ago = today - timedelta(days=10)
+
+    try:
+        latest_record = target_model.objects.latest('prediction_date')
+        latest_date = latest_record.prediction_date
+    except target_model.DoesNotExist:
+        return Response([])
+
+    # Logic to determine target date
+    first_query = target_model.objects.filter(
+        prediction_date=forecast_date, 
+        basin_id=basin_id
+    )
+    
+    if not first_query.exists():
+        target_date = latest_date
+        forecasts = target_model.objects.filter(
+            prediction_date=target_date, 
+            basin_id=basin_id
+        ).order_by('date', 'hours')
+    else:
+        target_date = forecast_date
+        forecasts = first_query.order_by('date', 'hours')
+
+    # Date comparison
+    if hasattr(target_date, 'year'):
+        check_date = target_date
+    else:
+        from datetime import datetime
+        check_date = datetime.strptime(str(target_date), "%Y-%m-%d").date()
+
+    if check_date < ten_days_ago:
+        return Response([])
+
+    # Response construction
+    response_data = {
+        "Hours": {"0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240},
+        "Thresholds": {},
+    }
+
+    # Group by date and maintain hour order
+    # Mapping table hours to indices
+    hours_map = {24: 0, 48: 1, 72: 2, 120: 3, 168: 4, 240: 5}
+    date_value_dict = defaultdict(lambda: [0.0] * 6)
+    threshold_list = [0.0] * 6
+
+    for forecast in forecasts:
+        idx = hours_map.get(forecast.hours)
+        if idx is not None:
+            date_value_dict[forecast.date][idx] = round(forecast.value, 2)
+            # Thresholds are usually the same for all dates, populate once
+            threshold_list[idx] = round(forecast.thresholds, 2)
+ 
+    response_data["Thresholds"] = {str(i): val for i, val in enumerate(threshold_list)}
+  
+    sorted_keys = sorted(date_value_dict.keys())
+    # Note: excluding last key as per your logic [:-1]
+    for key in sorted_keys[:-1]:
         string_date = key.strftime("%Y-%m-%d")
-        response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
+        response_data[string_date] = {
+            str(i): value for i, value in enumerate(date_value_dict[key])
+        }
+
+    return Response(response_data)
+
+
+# @api_view(['GET'])
+# def NewProbabilisticFlashFlood(request, **kwargs):
+#     forecast_date = kwargs['givenDate']
+#     basin_id = kwargs['basin_id']
+    
+#     # 1. Calculate the cutoff date (10 days ago from today)
+#     today = timezone.now().date()
+#     ten_days_ago = today - timedelta(days=10)
+
+#     try:
+#         # Get the latest record date to check if the database has "recent" data at all
+#         latest_record = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.latest('prediction_date')
+#         latest_date = latest_record.prediction_date
+#     except data_load_models.Probabilistic_Flash_Flood_Forecast.DoesNotExist:
+#         return Response([])
+
+#     # 2. Logic to determine which date to query
+#     first_query = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#         prediction_date=forecast_date, 
+#         basin_id=basin_id
+#     )
+    
+#     if not first_query.exists():
+#         # Fallback to the latest available date
+#         target_date = latest_date
+#         forecasts = data_load_models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#             prediction_date=target_date, 
+#             basin_id=basin_id
+#         )
+#     else:
+#         target_date = forecast_date # This might be a string from kwargs, handle conversion if needed
+#         forecasts = first_query
+
+#     # 3. Check if the determined target_date is older than 10 days
+#     # (Ensure target_date is a date object for comparison)
+#     if hasattr(target_date, 'year'): # check if it's already a date object
+#         check_date = target_date
+#     else:
+#         # If it's a string from kwargs, convert it (assuming YYYY-MM-DD)
+#         from datetime import datetime
+#         check_date = datetime.strptime(str(target_date), "%Y-%m-%d").date()
+
+#     if check_date < ten_days_ago:
+#         return Response([])
+
+#     # --- Proceed with response construction if date is recent ---
+
+#     response_data = {
+#         "Hours": {"0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240},
+#         "Thresholds": {},
+#     }
+
+#     threshold_list = []
+#     date_value_dict = defaultdict(list)
+
+#     for forecast in forecasts:
+#         threshold_list.append(forecast.thresholds)
+#         date_value_dict[forecast.date].append(forecast.value)
+ 
+#     # Format Thresholds
+#     threshold_dict = {str(i): val for i, val in enumerate(sorted(set(threshold_list)))}
+#     response_data["Thresholds"] = threshold_dict
+  
+#     # Format daily values
+#     # Note: excluding the last key as per your original logic [:-1]
+#     sorted_keys = sorted(date_value_dict.keys())
+#     for key in sorted_keys[:-1]:
+#         string_date = key.strftime("%Y-%m-%d")
+#         response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
+
+#     return Response(response_data)
+
+# @api_view(['GET'])
+# def MonsoonProbabilisticFlashFlood(request, **kwargs):
+#     given_date_str = kwargs.get('givenDate')
+#     basin_id = kwargs.get('basin_id')
+
+#     # 1. Define the 10-day window
+#     today = timezone.now().date()
+#     ten_days_ago = today - timedelta(days=10)
+
+#     # 2. Query the Correct Model
+#     # Filter by basin and the date provided in the URL
+#     forecasts = models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#         basin_id=basin_id,
+#         prediction_date=given_date_str
+#     ).order_by('date', 'hours')
+
+#     target_date = None
+
+#     if forecasts.exists():
+#         # Convert string to date object for age comparison
+#         try:
+#             target_date = datetime.strptime(given_date_str, "%Y-%m-%d").date()
+#         except ValueError:
+#             return Response({"error": "Invalid date format"}, status=400)
+#     else:
+#         # 3. Fallback: Find the latest available date specifically for this basin
+#         try:
+#             latest_record = models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#                 basin_id=basin_id
+#             ).latest('prediction_date')
+            
+#             target_date = latest_record.prediction_date
+            
+#             # Re-fetch all records for that specific latest date
+#             forecasts = models.Probabilistic_Flash_Flood_Forecast.objects.filter(
+#                 prediction_date=target_date, 
+#                 basin_id=basin_id
+#             ).order_by('date', 'hours')
+#         except models.Probabilistic_Flash_Flood_Forecast.DoesNotExist:
+#             return Response({"error": f"No records found for basin {basin_id}"}, status=404)
+
+#     # 4. Age Validation
+#     if target_date < ten_days_ago:
+#         return Response({
+#             "message": "Data is older than 10 days",
+#             "found_prediction_date": str(target_date),
+#             "cutoff_date": str(ten_days_ago)
+#         })
+
+#     # 5. Build the Response
+#     response_data = {
+#         "Hours": {"0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240},
+#         "Thresholds": {},
+#     }
+
+#     # Helper mapping to ensure hours align with the correct JSON index
+#     hours_map = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    
+#     threshold_set = set()
+#     date_groups = defaultdict(dict)
+
+#     for f in forecasts:
+#         # Add to unique thresholds
+#         threshold_set.add(round(f.thresholds, 2))
+        
+#         # Format the forecast target date
+#         d_str = f.date.strftime("%Y-%m-%d")
+        
+#         # Map value to index based on 'hours' field
+#         hour_idx = hours_map.get(f.hours)
+#         if hour_idx is not None:
+#             date_groups[d_str][hour_idx] = round(f.value, 2)
+
+#     # Format Thresholds: sorted numerically
+#     sorted_thresholds = sorted(list(threshold_set))
+#     response_data["Thresholds"] = {
+#         str(i): val for i, val in enumerate(sorted_thresholds)
+#     }
+
+#     # Add the date-wise data (e.g., "2026-04-20", "2026-04-21")
+#     for d_str in sorted(date_groups.keys()):
+#         response_data[d_str] = date_groups[d_str]
+
+#     return Response(response_data)
+
+@api_view(['GET'])
+def MonsoonProbabilisticFlashFlood(request, **kwargs):
+    given_date_str = kwargs.get('givenDate')
+    basin_id = kwargs.get('basin_id')
+    
+    # Pointing to the specific ECMWF model
+    target_model = models.ECMWF_Monsoon_Probabilistic_Flash_Flood_Forecast
+
+    today = timezone.now().date()
+    ten_days_ago = today - timedelta(days=10)
+
+    # 1. Fetch data for specific date
+    forecasts = target_model.objects.filter(
+        basin_id=basin_id,
+        prediction_date=given_date_str
+    ).order_by('date', 'hours')
+
+    target_date = None
+
+    if forecasts.exists():
+        try:
+            target_date = datetime.strptime(given_date_str, "%Y-%m-%d").date()
+        except ValueError:
+            return Response({"error": "Invalid date format"}, status=400)
+    else:
+        # 2. Fallback to latest available data for this basin
+        try:
+            latest_record = target_model.objects.filter(
+                basin_id=basin_id
+            ).latest('prediction_date')
+            
+            target_date = latest_record.prediction_date
+            forecasts = target_model.objects.filter(
+                prediction_date=target_date, 
+                basin_id=basin_id
+            ).order_by('date', 'hours')
+        except target_model.DoesNotExist:
+            return Response({"error": f"No records found for basin {basin_id}"}, status=404)
+
+    # 3. Expiry Check
+    if target_date < ten_days_ago:
+        return Response({"message": "Data is older than 10 days"}, status=200)
+
+    # 4. JSON Construction
+    response_data = {
+        "Hours": {"0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240},
+        "Thresholds": {},
+    }
+
+    hours_map = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    threshold_set = set()
+    date_groups = defaultdict(dict)
+
+    for f in forecasts:
+        threshold_set.add(round(f.thresholds, 2))
+        d_str = f.date.strftime("%Y-%m-%d")
+        hour_idx = hours_map.get(f.hours)
+        if hour_idx is not None:
+            date_groups[d_str][hour_idx] = round(f.value, 2)
+
+    # Sort thresholds and map to indices
+    sorted_thresholds = sorted(list(threshold_set))
+    response_data["Thresholds"] = {str(i): val for i, val in enumerate(sorted_thresholds)}
+
+    # Map daily results
+    for d_str in sorted(date_groups.keys()):
+        response_data[d_str] = date_groups[d_str]
 
     return Response(response_data)
 
@@ -3067,6 +3807,154 @@ def UKMetMonsoonProbabilisticFlashFlood(request,**kwargs):
 
     return Response(response_data)
 
+@api_view(['GET'])
+def UKMetPreMonsoonProbabilisticFlashFlood(request, **kwargs):
+    # 1. Capture the requested date from the URL (givenDate)
+    requested_date_str = kwargs['givenDate'] 
+    basin_id = kwargs['basin_id']
+
+    restricted_basins = [10, 11]
+
+    if basin_id in restricted_basins:
+        return Response(
+            {"detail": f"Data for Basin ID {basin_id} is restricted or unavailable."}, 
+            status=403
+        )
+
+    try:
+        target_prediction_dt = datetime.strptime(requested_date_str, '%Y-%m-%d').date()
+    except ValueError:
+        return Response({"error": "Invalid date format. Use YYYY-MM-DD."}, status=400)
+
+    # 2. Query data for the requested run date
+    # Targeting the Probabilistic model/table
+    forecast_query = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.filter(
+        prediction_date=target_prediction_dt, 
+        basin_id=basin_id
+    ).order_by('date', 'hours')
+    
+    # Fallback logic: If URL date is empty in DB, find the latest available probabilistic run
+    actual_run_date_str = requested_date_str
+    if not forecast_query.exists():
+        try:
+            latest_record = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.latest('prediction_date')
+            target_prediction_dt = latest_record.prediction_date
+            actual_run_date_str = target_prediction_dt.strftime("%Y-%m-%d")
+            forecast_query = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.filter(
+                prediction_date=target_prediction_dt, 
+                basin_id=basin_id
+            ).order_by('date', 'hours')
+        except models.UKMetPreMonsoonProbabilisticFlashFloodForecast.DoesNotExist:
+            return Response({"error": "No Pre-Monsoon Probabilistic data found."}, status=404)
+
+    # 3. Define the Hour-to-Index Map
+    # Prevents index-shifting if database rows are out of order
+    hour_to_idx = {24: "0", 48: "1", 72: "2", 120: "3", 168: "4", 240: "5"}
+    
+    response_data = {
+        "Hours": { "0": 24, "1": 48, "2": 72, "3": 120, "4": 168, "5": 240 },
+        "Threshold": {}, # Singular key to match your frontend requirement
+    }
+
+    date_value_dict = defaultdict(dict)
+    threshold_map = {}
+
+    # 4. Populate Data from Database
+    for f in forecast_query:
+        d_str = f.date.strftime("%Y-%m-%d")
+        idx = hour_to_idx.get(f.hours)
+        
+        if idx:
+            # For probabilistic, 'value' is the exceedance percentage
+            date_value_dict[d_str][idx] = round(f.value, 2)
+            # Standardize Threshold mapping
+            if idx not in threshold_map:
+                threshold_map[idx] = round(f.thresholds, 2)
+
+    # --- 5. THE DAY 1 INJECTOR ---
+    # Ensure the 'Run Date' (today) always exists as the starting point.
+    if actual_run_date_str not in date_value_dict:
+        date_value_dict[actual_run_date_str] = {str(i): 0.0 for i in range(6)}
+    else:
+        # Fill any missing probabilistic hour slots for today with 0.0
+        for i in range(6):
+            if str(i) not in date_value_dict[actual_run_date_str]:
+                date_value_dict[actual_run_date_str][str(i)] = 0.0
+
+    # 6. Final Construction & Chronological Sorting
+    response_data["Threshold"] = threshold_map
+  
+    # Sort keys ensures the timeline flows correctly: Today -> Tomorrow -> Future
+    for key in sorted(date_value_dict.keys()):
+        current_date_data = date_value_dict[key]
+        # Guarantee every date object has all 6 index keys (0-5)
+        full_indices = {str(i): current_date_data.get(str(i), 0.0) for i in range(6)}
+        response_data[key] = full_indices
+
+    return Response(response_data)
+
+# @api_view(['GET'])
+# def UKMetPreMonsoonProbabilisticFlashFlood(request, **kwargs):
+#     forecast_date = kwargs['givenDate']
+#     basin_id = kwargs['basin_id']
+
+#     # 1. Handle Fallback Logic
+#     try:
+#         latest_record = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.latest('prediction_date')
+#         latest_date = latest_record.prediction_date
+#     except models.UKMetPreMonsoonProbabilisticFlashFloodForecast.DoesNotExist:
+#         return Response({"error": "No Pre-Monsoon probabilistic data found in database."}, status=404)
+
+#     # Attempt to get the requested date
+#     first_query = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.filter(
+#         prediction_date=forecast_date, 
+#         basin_id=basin_id
+#     ).order_by('date', 'hours')
+    
+#     if not first_query.exists():
+#         forecast_date = latest_date
+#         forecasts = models.UKMetPreMonsoonProbabilisticFlashFloodForecast.objects.filter(
+#             prediction_date=forecast_date, 
+#             basin_id=basin_id
+#         ).order_by('date', 'hours')
+#     else:
+#         forecasts = first_query
+
+#     # 2. Initialize the Response Structure
+#     response_data = {
+#         "Hours": {
+#             "0": 24,
+#             "1": 48,
+#             "2": 72,
+#             "3": 120,
+#             "4": 168,
+#             "5": 240
+#         },
+#         "Thresholds": {},
+#     }
+
+#     threshold_list = []
+#     date_value_dict = defaultdict(list)
+
+#     # 3. Populate Data from Database
+#     for forecast in forecasts:
+#         threshold_list.append(forecast.thresholds)
+#         date_value_dict[forecast.date].append(forecast.value)
+ 
+#     # Standardize Threshold mapping (Index 0 = lowest threshold, Index 5 = highest)
+#     unique_thresholds = sorted(list(set(threshold_list)))
+#     response_data["Thresholds"] = {str(i): t for i, t in enumerate(unique_thresholds)}
+  
+#     # Build date-wise probability maps
+#     # Note: I used the full list here. If you specifically need to exclude the last day 
+#     # (as in your example [:-1]), you can keep that slice.
+#     sorted_dates = sorted(date_value_dict.keys())
+#     for key in sorted_dates:
+#         string_date = key.strftime("%Y-%m-%d")
+#         response_data[string_date] = {str(i): value for i, value in enumerate(date_value_dict[key])}
+
+#     return Response(response_data)
+    
 
 
 from data_load.models import FloodSummaryReport
@@ -3224,10 +4112,6 @@ class monsoonConfigViewSet(viewsets.ReadOnlyModelViewSet):
 
     queryset = models.MonsoonConfig.objects.all()
     serializer_class = serializers.MonsoonConfigSerializer
-    
-    
-    
-    
     
 
 """
@@ -3727,29 +4611,80 @@ def update_district_flood_alert(request, id):
     }, status=status.HTTP_200_OK)
 
 
-class DistrictFloodAlertCreateView(generics.CreateAPIView):
+# class DistrictFloodAlertCreateView(generics.CreateAPIView):
     
-    queryset = models.DistrictFloodAlert.objects.all()
-    serializer_class = serializers.DistrictFloodAlertSerializer
+#     queryset = models.DistrictFloodAlert.objects.all()
+#     serializer_class = serializers.DistrictFloodAlertSerializer
 
-    def create(self, request, *args, **kwargs):
-        try:
-            # return super().create(request, *args, **kwargs)
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
-            self.perform_create(serializer)
+#     def create(self, request, *args, **kwargs):
+#         try:
+#             # return super().create(request, *args, **kwargs)
+#             serializer = self.get_serializer(data=request.data)
+#             serializer.is_valid(raise_exception=True)
+#             self.perform_create(serializer)
             
-            return Response({
-                "message": "Successfully flood status created."
-            }, status=status.HTTP_200_OK)
+#             return Response({
+#                 "message": "Successfully flood status created."
+#             }, status=status.HTTP_200_OK)
             
-        except IntegrityError:
+#         except IntegrityError:
+#             return Response(
+#                 {"error": "Alert for this district and date already exists."},
+#                 status=status.HTTP_400_BAD_REQUEST
+#             )
+
+
+from rest_framework.authentication import SessionAuthentication, BasicAuthentication
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import IsAuthenticated
+from django.views.decorators.csrf import csrf_exempt
+
+@csrf_exempt
+@api_view(['GET', 'POST'])
+@permission_classes([IsAuthenticated])
+def district_alerts_create_single(request):
+    """
+    POST: Create or Update a District Flood Alert (Upsert).
+    Works exactly like update_district_flood_alert but identifies by date/district.
+    """
+    if request.method == 'GET':
+        return Response({"detail": "Authorized. Use 'Raw data' tab to POST."}, status=status.HTTP_200_OK)
+
+    if request.method == 'POST':
+        # 1. Capture fields from payload (Mirroring your PUT logic style)
+        alert_type_id = request.data.get('alert_type')
+        alert_date = request.data.get('alert_date')
+        district_name = request.data.get('district_name')
+
+        if not all([alert_type_id, alert_date, district_name]):
             return Response(
-                {"error": "Alert for this district and date already exists."},
+                {"error": "alert_type, alert_date, and district_name are all required"},
                 status=status.HTTP_400_BAD_REQUEST
             )
-            
+        
+        # 2. Match the alert_type (Mirroring your PUT logic)
+        try:
+            new_alert_type = models.WaterlevelAlert.objects.get(pk=alert_type_id)
+        except models.WaterlevelAlert.DoesNotExist:
+            return Response(
+                {"error": f"Invalid alert_type ID: {alert_type_id}"},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        
+        # 3. Perform Upsert (Logic update)
+        # Instead of filter(pk=id).update(), we find by Date+District
+        obj, created = models.DistrictFloodAlert.objects.update_or_create(
+            alert_date=alert_date,
+            district_name=district_name,
+            defaults={'alert_type': new_alert_type}
+        )
 
+        # 4. Success Response (Mirroring your PUT response style)
+        verb = "created" if created else "updated"
+        return Response({
+            "message": f"Successfully {verb} flood status for {district_name} on {alert_date}",
+            "id": obj.id
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 from data_load.models import BulletinRelatedManue
 from data_load.serializers import BulletinRelatedManueSerializer
@@ -4275,3 +5210,249 @@ def SubBasinPrecipiation(request,lat,lng):
 
     jsonResult = d[1]
     return Response(jsonResult)
+
+
+# import json
+# JSON_FILE_PATH = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast/latest_cumilla_forecast.json'
+
+# def get_latest_cumilla_forecast(request):
+#     """Returns the full JSON data from the latest run."""
+#     if os.path.exists(JSON_FILE_PATH):
+#         with open(JSON_FILE_PATH, 'r') as f:
+#             data = json.load(f)
+#         return JsonResponse(data)
+#     return JsonResponse({"code": "error", "message": "No data available."}, status=404)
+
+
+import json
+# Base directory for all forecast JSONs
+FORECAST_ASSETS_DIR = '/home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/flood-monitor-basin-forecast'
+
+def get_json_data(filename):
+    """Helper function to read JSON files from the assets directory."""
+    file_path = os.path.join(FORECAST_ASSETS_DIR, filename)
+    if os.path.exists(file_path):
+        with open(file_path, 'r') as f:
+            return json.load(f)
+    return None
+
+# --- Amalshid View ---
+def get_latest_amalshid_forecast(request):
+    data = get_json_data('latest_amalshid_forecast.json')
+    if data:
+        return JsonResponse(data)
+    return JsonResponse({"code": "error", "message": "Amalshid data not available."}, status=404)
+
+# --- Sylhet View ---
+def get_latest_sylhet_forecast(request):
+    data = get_json_data('latest_sylhet_forecast.json')
+    if data:
+        return JsonResponse(data)
+    return JsonResponse({"code": "error", "message": "Sylhet data not available."}, status=404)
+
+# --- Sunamganj View ---
+def get_latest_sunamganj_forecast(request):
+    data = get_json_data('latest_sunamganj_forecast.json')
+    if data:
+        return JsonResponse(data)
+    return JsonResponse({"code": "error", "message": "Sunamganj data not available."}, status=404)
+
+def get_latest_parshuram_forecast(request):
+    """
+    Serves the latest Parshuram forecast JSON data generated by the management command.
+    """
+    json_path = os.path.join(
+        settings.BASE_DIR, 
+        'assets', 
+        'flood-monitor-basin-forecast', 
+        'latest_parshuram_forecast.json'
+    )
+    
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            data = json.load(f)
+        return JsonResponse(data)
+    else:
+        return JsonResponse({
+            "code": "error",
+            "message": "Forecast data not found. Please wait for the next scheduled update."
+        }, status=404)
+        
+# --- Original Cumilla View (Updated for consistency) ---
+def get_latest_cumilla_forecast(request):
+    data = get_json_data('latest_cumilla_forecast.json')
+    if data:
+        return JsonResponse(data)
+    return JsonResponse({"code": "error", "message": "Cumilla data not available."}, status=404)
+
+def get_latest_dalia_forecast(request):
+    json_path = os.path.join(settings.BASE_DIR, 'assets', 'flood-monitor-basin-forecast', 'latest_dalia_forecast.json')
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            return JsonResponse(json.load(f))
+    return JsonResponse({"code": "error", "message": "Dalia data not found."}, status=404)
+    
+def get_forecast_metadata(request):
+    """Returns only the forecast date and run time from the latest file."""
+    if os.path.exists(JSON_FILE_PATH):
+        with open(JSON_FILE_PATH, 'r') as f:
+            full_data = json.load(f)
+            
+        # Return only the relevant date info
+        return JsonResponse({
+            "code": "success",
+            "forecast_date": full_data['metadata']['forecast_date'],
+            "last_updated": full_data['metadata']['run_datetime']
+        })
+    return JsonResponse({"code": "error", "message": "No data available."}, status=404)
+
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
+logger = logging.getLogger(__name__)
+
+@method_decorator(csrf_exempt, name='dispatch')
+class ProxyRequestView(View):
+    ALLOWED_METHODS = ('GET', 'POST', 'PUT', 'PATCH', 'HEAD', 'OPTIONS')
+    SECRET_VAL = "FFWC-Project-2026-Secure-V1"
+
+    def post(self, request, *args, **kwargs):
+        # 1. TRACING: Verify the Internal Key reaches Django
+        app_key = request.headers.get('x-ffwc-internal-key')
+        print(f"\n--- [PROXY DEBUG START] ---")
+        print(f"Internal Key Received: {app_key}")
+
+        if app_key != self.SECRET_VAL:
+            print(f"ERROR: Security Key Mismatch. Expected: {self.SECRET_VAL}")
+            return JsonResponse({'error': 'Unauthorized Proxy Access'}, status=403)
+
+        # 2. Parse Payload
+        try:
+            payload = json.loads(request.body)
+        except (json.JSONDecodeError, ValueError):
+            return JsonResponse({'error': 'Invalid JSON body'}, status=400)
+
+        url = payload.get('url')
+        method = payload.get('method', 'POST').upper()
+        print(f"Targeting URL: {url} using {method}")
+
+        # 3. Mirror Postman Headers (THE FIX)
+        # We start with headers provided in payload, but we clean/override them
+        incoming_headers = payload.get('headers', {})
+        
+        # Clean standard headers that might cause 403 if they point to the wrong host
+        for key in ['Host', 'host', 'Origin', 'origin', 'Referer', 'referer']:
+            incoming_headers.pop(key, None)
+
+        # Re-build headers to look exactly like a valid client
+        outbound_headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept': '*/*',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+        }
+        # Merge payload headers (like Authorization token) into our clean set
+        outbound_headers.update(incoming_headers)
+
+        body = payload.get('body', {})
+        params = payload.get('params', {})
+        
+        request_kwargs = {
+            'url': url,
+            'headers': outbound_headers,
+            'params': params,
+            'verify': False, 
+            'timeout': 30,
+        }
+
+        if method not in ('GET', 'HEAD', 'OPTIONS'):
+            request_kwargs['json'] = body
+
+        # 4. Execution & Detailed Response Tracing
+        try:
+            print(f"Sending Request to Upstream...")
+            response = requests.request(method=method, **request_kwargs)
+            print(f"Upstream responded with Status: {response.status_code}")
+            
+            # If we still get a 403, print the first 200 chars of response for debugging
+            if response.status_code == 403:
+                print(f"UPSTREAM 403 DETECTED. Content snippet: {response.text[:200]}")
+
+            try:
+                return JsonResponse(response.json(), safe=False, status=response.status_code)
+            except ValueError:
+                return HttpResponse(
+                    content=response.text,
+                    status=response.status_code,
+                    content_type=response.headers.get('Content-Type', 'text/plain')
+                )
+
+        except Exception as e:
+            print(f"PROXY EXCEPTION: {str(e)}")
+            return JsonResponse({'error': f'Proxy Error: {str(e)}'}, status=502)
+
+# @method_decorator(csrf_exempt, name='dispatch')
+# class ProxyRequestView(View):
+#     # Allowed methods for the proxy
+#     ALLOWED_METHODS = ('GET', 'POST', 'PUT', 'PATCH', 'HEAD', 'OPTIONS')
+#     # Use the same key as your middleware
+#     SECRET_VAL = "FFWC-Project-2026-Secure-V1"
+
+#     def post(self, request, *args, **kwargs):
+#         # 1. Security Check: Block unauthorized proxy use
+#         app_key = request.headers.get('x-ffwc-internal-key')
+#         if app_key != self.SECRET_VAL:
+#             return JsonResponse({'error': 'Unauthorized Proxy Access'}, status=403)
+
+#         # 2. Parse the Incoming JSON
+#         try:
+#             payload = json.loads(request.body)
+#         except (json.JSONDecodeError, ValueError):
+#             return JsonResponse({'error': 'Invalid JSON body'}, status=400)
+
+#         url = payload.get('url')
+#         if not url:
+#             return JsonResponse({'error': 'Target url is required'}, status=400)
+
+#         method = payload.get('method', 'POST').upper()
+#         if method not in self.ALLOWED_METHODS:
+#             return JsonResponse({'error': f'Method {method} not allowed'}, status=405)
+
+#         # 3. Prepare the Outbound Request Configuration
+#         headers = payload.get('headers', {})
+#         body = payload.get('body', {})
+#         params = payload.get('params', {})
+#         timeout = payload.get('timeout', 30)
+
+#         # Build the arguments for the requests library
+#         request_kwargs = {
+#             'url': url,
+#             'headers': headers,
+#             'params': params,
+#             'verify': False, # Avoid SSL issues with internal gov certificates
+#             'timeout': timeout,
+#         }
+
+#         # If it's a data-carrying request, send as JSON
+#         if method not in ('GET', 'HEAD', 'OPTIONS'):
+#             request_kwargs['json'] = body
+
+#         # 4. Perform the request and return the result
+#         try:
+#             response = requests.request(method=method, **request_kwargs)
+            
+#             # Check if response is JSON
+#             try:
+#                 return JsonResponse(response.json(), safe=False, status=response.status_code)
+#             except ValueError:
+#                 # Fallback to raw text (HTML, XML, or Plain Text)
+#                 return HttpResponse(
+#                     content=response.text,
+#                     status=response.status_code,
+#                     content_type=response.headers.get('Content-Type', 'text/plain')
+#                 )
+
+#         except requests.exceptions.Timeout:
+#             return JsonResponse({'error': 'Upstream API (BWDB) timed out'}, status=504)
+#         except requests.exceptions.RequestException as e:
+#             return JsonResponse({'error': f'Proxy Connection Error: {str(e)}'}, status=502)

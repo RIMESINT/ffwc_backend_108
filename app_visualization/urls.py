@@ -64,7 +64,6 @@ urlpatterns = [
         name='basin_list_dd'
     ), 
 
-
     ##########################################################
     ### API for forecast with source, basin wise
     ##########################################################
@@ -73,7 +72,7 @@ urlpatterns = [
         BasinWiseForcastingViewSet.as_view({'get': 'level_wise_forecast_date_wise_all_loc'}), 
         name='level_wise_forecast_date_wise_all_loc'
     ),  
-    
+
     ##########################################################
     ### API for forecast with source, basin wise from NC file
     ##########################################################

@@ -359,19 +359,42 @@ class StationSerializer(serializers.ModelSerializer):
     #         if representation[field] is None:
     #             representation[field] = "-"
     #     return representation
+    
+    # def to_representation(self, instance):
+    #     representation = super().to_representation(instance)
+        
+    #     if representation.get('station_serial_no') is None:
+    #         representation['station_serial_no'] = 0
+        
+    #     for key in representation:
+    #         if key == 'station_serial_no':
+    #             continue  
+    #         if representation[key] is None:
+    #             representation[key] = "-"
+        
+    #     return representation
+    
+    
     def to_representation(self, instance):
         representation = super().to_representation(instance)
+        
+        # Ensure status is handled if you want it to stay boolean 
+        # or be part of the "-" conversion logic.
         
         if representation.get('station_serial_no') is None:
             representation['station_serial_no'] = 0
         
         for key in representation:
-            if key == 'station_serial_no':
+            # If you want status to remain a boolean (True/False), 
+            # add it to this 'continue' list.
+            if key in ['station_serial_no', 'status']:
                 continue  
             if representation[key] is None:
                 representation[key] = "-"
         
         return representation
+    
+    
     # def to_representation(self, instance):
     #     representation = super().to_representation(instance)
         
@@ -404,7 +427,7 @@ class StationSerializer(serializers.ModelSerializer):
             'district', 'district_bn', 'upazilla', 'upazilla_bn',
             'union', 'union_bn', 'five_days_forecast', 'ten_days_forecast',
             'monsoon_station', 'pre_monsoon_station', 'dry_period_station',
-            'sms_id'
+            'sms_id','status'
         ]
 
 
@@ -1137,7 +1160,8 @@ class RainfallObservationByDateSerializer(serializers.Serializer):
         return obj.get('max_rainfall')
         
 class ThreeDaysObservedRainfallSerializer(serializers.ModelSerializer):
-    observation_date = serializers.DateTimeField(format="%d-%m-%Y")
+    # observation_date = serializers.DateTimeField(format="%d-%m-%Y")
+    observation_date = serializers.DateTimeField(format="%m-%d-%Y")
     rainfall = serializers.DecimalField(max_digits=8, decimal_places=2, coerce_to_string=True)
 
     class Meta:

@@ -21,6 +21,8 @@ from django.views.decorators.http import require_POST
 from django.utils.decorators import method_decorator
 
 from rangefilter.filters import DateRangeFilterBuilder
+from app_user_mobile.forms import HydroSyncForm
+
 
 
 import os 
@@ -41,7 +43,9 @@ from django.urls import path, reverse
 from django.http import HttpResponseRedirect, JsonResponse 
 from celery.result import AsyncResult,states
 from .tasks import process_observations_csv,import_forecast_files,import_experimental_forecast_files 
-from .tasks import generate_rainfall_map_task,generate_flood_alerts_task
+from .tasks import generate_rainfall_map_task,generate_flood_alerts_task,generate_flood_summary_task
+
+
 
 from .forms import CSVUploadForm, ForecastCsvImportForm 
 from .utils import ExportCsvMixin 
@@ -86,7 +90,7 @@ class CustomUserAdmin(UserAdmin):
     list_filter = ('is_staff', 'is_active', 'groups')
     search_fields = ('username', 'email')
     fieldsets = (
-        (None, {'fields': ('username', 'password')}),
+        (None, {'fields': ('username',  )}),
         ('Personal Info', {'fields': ('first_name', 'last_name', 'email')}),
         ('Permissions', {'fields': ('is_active', 'is_staff', 'is_superuser', 'groups', 'user_permissions')}),
         ('Important dates', {'fields': ('last_login', 'date_joined')}),
@@ -152,7 +156,7 @@ class StationAdmin(admin.ModelAdmin):
         ('Basic Info', {'fields': ('station_id', 'station_code', 'bwdb_id', 'name', 'name_bn')}),
         ('Location', {'fields': ('latitude', 'longitude', 'division', 'district', 'upazilla', 'union')}),
         ('River Info', {'fields': ('river', 'river_bn', 'river_chainage', 'basin')}),
-        ('Water Level Info', {'fields': ('danger_level', 'highest_water_level', 'highest_water_level_date')}),
+        ('Water Level Info', {'fields': ('danger_level', 'highest_water_level', 'highest_water_level_date','pmdl')}),
         ('Forecast Settings', {'fields': ('five_days_forecast', 'ten_days_forecast', 'monsoon_station', 'pre_monsoon_station', 'dry_period_station')}),
         ('Other', {'fields': ('status', 'station_order', 'medium_range_station', 'experimental', 'ffdata_header')}),
     )
@@ -430,15 +434,23 @@ class WaterlevelForecastAdmin(admin.ModelAdmin, ExportCsvMixin):
                     normalized_db_name = s.name.strip().replace(' ', '').lower()
                     station_name_to_id_map[normalized_db_name] = s.station_id # Store Station.station_id
             logger.info(f"Station name to ID map built: {station_name_to_id_map}")
-
+            
             station_aliases = {
-                'baiderbazar': 'baidyarbazar',
+                # --- FIXED MATCHES (Based on your exact Database keys) ---
+                'baiderbazar': 'bayderbazar',      # Filename 'Baiderbazar' -> DB 'bayderbazar'
+                'sutangrly.bridge': 'sutang-rb',   # Filename 'Sutangrly.bridge' -> DB 'sutang-rb'
+                'sutangrlybridge': 'sutang-rb',    # Fallback copy
+                
+                # --- CORRECTION FOR ELASINGHAT ---
+                # Removing the old 'elasinghat': 'elasin' map ensures it passes straight 
+                # through to match the correct DB key: 'elasinghat'
+                'elasinghat': 'elasinghat',
+
+                # --- REGULAR WORKING ALIASES ---
                 'barisal': 'barishal',
                 'bogra': 'bogura',
                 'c-nawabganj': 'chapai-nawabganj',
                 'chittagong': 'chattogram',
-                'chittagong': 'chattogram',
-                'elasinghat': 'elasin',
                 'manu-rly-br': 'manu-rb',
                 'meghna-br': 'meghnabridge',
                 'mohadevpur': 'mohadebpur',
@@ -446,14 +458,46 @@ class WaterlevelForecastAdmin(admin.ModelAdmin, ExportCsvMixin):
                 'sherpur': 'sherpur-sylhet',
                 'comilla': 'cumilla',
                 'jibanpur': 'debidwar',
-
-                # 'rekabibazar': 'rekabi',
-                # 'c-nawabganj': 'c',
-                # 'meghna-br': 'meghna',
-                # 'hardinge-rb': 'hardinge',
-                # 'manu-rly-br': 'manu',
-                # 'gorai-rb': 'gorai'
             }
+
+            # station_aliases = {
+                
+            #     'baiderbazar': 'baidyarbazar',
+            #     'baidyarbazar': 'baidyarbazar',
+                
+            #     'sutangrly.bridge': 'sutangrlybridge',
+            #     'sutangrlybridge': 'sutangrlybridge',
+                
+                
+            #     'barisal': 'barishal',
+            #     'bogra': 'bogura',
+            #     'c-nawabganj': 'chapai-nawabganj',
+            #     'chittagong': 'chattogram',
+            #     'manu-rly-br': 'manu-rb',
+            #     'meghna-br': 'meghnabridge',
+            #     'mohadevpur': 'mohadebpur',
+            #     'rekabibazar': 'rekabi-bazar',
+            #     'sherpur': 'sherpur-sylhet',
+            #     'comilla': 'cumilla',
+            #     'jibanpur': 'debidwar',
+                
+                
+            #     # 'barisal': 'barishal',
+            #     # 'bogra': 'bogura',
+            #     # 'c-nawabganj': 'chapai-nawabganj',
+            #     # 'chittagong': 'chattogram',
+            #     # 'chittagong': 'chattogram',
+    
+            #     # 'manu-rly-br': 'manu-rb',
+            #     # 'meghna-br': 'meghnabridge',
+            #     # 'mohadevpur': 'mohadebpur',
+            #     # 'rekabibazar': 'rekabi-bazar',
+            #     # 'sherpur': 'sherpur-sylhet',
+            #     # 'comilla': 'cumilla',
+            #     # 'jibanpur': 'debidwar',
+                
+
+            # }
             logger.info(f"Custom station aliases: {station_aliases}")
             
             dispatched_task_ids_with_filenames = [] # To store task_id and filename for frontend tracking
@@ -516,7 +560,7 @@ class WaterlevelForecastAdmin(admin.ModelAdmin, ExportCsvMixin):
 
 
 
-# Custom Admin for WaterLevelForecastsExperimentals
+# # Custom Admin for WaterLevelForecastsExperimentals
 @admin.register(WaterLevelForecastsExperimentals)
 class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
     list_display = ('display_station_id', 'station_code', 'station_name', 'forecast_date', 'waterlevel_min', 'waterlevel_max', 'waterlevel_mean')
@@ -525,14 +569,12 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
     list_per_page = 25
     ordering = ('station_id_id',)
 
-    change_list_template = "admin/data_load/waterlevelforecastsexperimental/change_list.html" # Path for the changelist template
+    change_list_template = "admin/data_load/waterlevelforecastsexperimental/change_list.html"
 
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
-            # URL for importing experimental forecast CSVs (uses same form)
             path('import-csv/', self.admin_site.admin_view(self.import_experimental_forecast_csv), name='experimental-forecast-import-csv'),
-            # URL for polling task status for experimental forecasts
             path('task-status-experimental/<str:task_id>/', self.admin_site.admin_view(self.task_status_experimental_view), name='task_status_experimental'),
         ]
         return custom_urls + urls
@@ -542,7 +584,7 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
         
         if request.method == "POST":
             logger.info("Received POST request for experimental forecast CSV import")
-            form = ForecastCsvImportForm(request.POST, request.FILES) # Use the same form for multiple files
+            form = ForecastCsvImportForm(request.POST, request.FILES)
 
             if not form.is_valid():
                 logger.error(f"Invalid form data: {form.errors.as_json()}")
@@ -558,6 +600,7 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
                 messages.error(request, "No files were uploaded.")
                 return JsonResponse({"error": "No files uploaded"}, status=400)
 
+            # Pre-fetch and normalize master station database keys
             station_name_to_id_map = {}
             for s in Station.objects.all():
                 if s.name:
@@ -565,32 +608,25 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
                     station_name_to_id_map[normalized_db_name] = s.station_id
             logger.info(f"Station name to ID map built: {station_name_to_id_map}")
 
+            # Fixed station dictionary aliases matching your database shell snapshot
             station_aliases = {
-
-                # 'gorai-rb': 'gorai'
-                # 'rekabibazar': 'rekabi', 'c-nawabganj': 'c', 'meghna-br': 'meghna',
-                # 'hardinge-rb': 'hardinge', 'manu-rly-br': 'manu', 'gorai-rb': 'gorai'
-                # 'baiderbazar': 'baidyarbazar',
-                # 'barisal': 'barishal',
-                # 'bogra': 'bogura',
-                # 'c-nawabganj': 'chapai-nawabganj',
-                # 'chittagong': 'chattogram',
-                # 'chittagong': 'chattogram',
-                'elasinghat': 'elasin',
-                'elashinghat': 'elasin',
-                'hardinge-bridge':'hardinge-rb',
-                'hardinge':'hardinge-rb',
-                'sureshwar':'sureshswar'
-
                 
-                # 'manu-rly-br': 'manu-rb',
-                # 'meghna-br': 'meghnabridge',
-                # 'mohadevpur': 'mohadebpur',
-                # 'rekabibazar': 'rekabi-bazar',
-                # 'sherpur': 'sherpur-sylhet',
-                # 'comilla': 'cumilla',
-                # 'jibanpur': 'debidwar',
-
+                'mohadevpur': 'mohadebpur',       
+                'sherpur': 'sherpur-sylhet',
+                
+                'baiderbazar': 'bayderbazar',
+                'sutangrly.bridge': 'sutang-rb',
+                'sutangrlybridge': 'sutang-rb',
+                'elasinghat': 'elasinghat',
+                'elashinghat': 'elasinghat',
+                'hardinge-bridge': 'hardinge-rb',
+                'hardinge': 'hardinge-rb',
+                'sureshwar': 'sureshswar',
+                'barisal': 'barishal',
+                'bogra': 'bogura',
+                'comilla': 'cumilla',
+                'chittagong': 'chattogram',
+                'jibanpur': 'debidwar'
             }
             logger.info(f"Custom station aliases: {station_aliases}")
             
@@ -599,26 +635,32 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
 
             for f in uploaded_files:
                 try:
-                    file_station_name = os.path.splitext(f.name)[0].strip().replace(' ', '').lower()
-                    logger.info(f"Processing file: {f.name}, derived station_name: {file_station_name}")
+                    # Clean punctuation variants cleanly
+                    base_name = os.path.splitext(f.name)[0].strip().lower()
+                    
+                    # 1. First, preserve text periods for compound targets like 'sutangrly.bridge'
+                    if base_name in station_aliases:
+                        file_station_name = station_aliases[base_name]
+                    else:
+                        # 2. Otherwise drop spaces and fallback to simple string matching
+                        file_station_name = base_name.replace(' ', '')
+                        if file_station_name in station_aliases:
+                            file_station_name = station_aliases[file_station_name]
 
-                    if file_station_name in station_aliases:
-                        file_station_name = station_aliases[file_station_name]
+                    logger.info(f"Processing file: {f.name}, derived station_name: {file_station_name}")
                         
                     if file_station_name not in station_name_to_id_map:
-                        error_msg = f"Station '{file_station_name}' derived from filename '{f.name}' not found in mapping. Skipping this file."
+                        error_msg = f"Station identification key '{file_station_name}' derived from filename '{f.name}' not found in mapping list. Skipping."
                         logger.error(error_msg)
                         messages.warning(request, error_msg)
                         continue
 
                     file_obj = f.read()
                     pd_csv = io.BytesIO(file_obj)
-                    # --- UPDATED: skiprows=2 and delimiter=',' for experimental files ---
                     forecastDF = pd.read_csv(pd_csv, skiprows=1, encoding='utf-8-sig', delimiter=',')
                     
                     logger.info(f"DataFrame for {f.name} columns: {forecastDF.columns.tolist()}")
 
-                    # Dispatch to the new experimental forecast task
                     task = import_experimental_forecast_files.delay(1, forecastDF.to_dict(), station_name_to_id_map, file_station_name)
                     dispatched_task_ids_with_filenames.append({'id': task.id, 'name': f.name})
                     tasks_dispatched_count += 1
@@ -641,21 +683,15 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
 
         logger.info("Rendering experimental forecast CSV import form")
         form = ForecastCsvImportForm()
-        # Reusing the multiple_csv_upload template
         context = self.admin_site.each_context(request)
         context['title'] = 'Upload Experimental Water Level Forecasts CSV'
         context['form'] = form
         context['opts'] = self.model._meta
-        # Crucially, pass the correct task status URL name for the JS
         context['task_status_url_name'] = 'admin:task_status_experimental' 
         return render(request, "admin/multiple_csv_upload.html", context)
 
-
-
-    # Re-using the shared helper for status view
     def task_status_experimental_view(self, request, task_id):
         return JsonResponse(_get_task_status_response_data(task_id, 'admin:task_status_experimental'))
-
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
@@ -673,6 +709,191 @@ class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
     def station_code(self, obj):
         return obj.station_id.station_code if obj.station_id else None
     station_code.short_description = 'Station Code'
+
+
+# --- BULK TASK POLLING SYSTEM CIRCUIT BREAKER ---
+def _get_task_status_response_data(task_id, reverse_url_name):
+    result = AsyncResult(task_id)
+    try:
+        task_state = result.backend.get_status(task_id)
+    except Exception:
+        task_state = states.FAILURE
+
+    response_data = {
+        'state': task_state,
+        'message': 'Processing and syncing timeseries entries...', 
+        'percent': 0,
+        'current': 0,
+        'total': 0,
+        'status_url': reverse(reverse_url_name, args=[task_id])
+    }
+
+    try:
+        raw_info = result.backend.get_result(task_id)
+    except Exception:
+        raw_info = None
+
+    if isinstance(raw_info, dict):
+        response_data.update(raw_info)
+        response_data['message'] = raw_info.get('message', 'Processing...')
+        response_data['percent'] = raw_info.get('percent', 0)
+        
+        if raw_info.get('state') == 'FAILED' or task_state in [states.FAILURE, 'FAILED']:
+            response_data['state'] = states.FAILURE
+            response_data['percent'] = 100
+    else:
+        if task_state in [states.FAILURE, 'FAILED']:
+            response_data['state'] = states.FAILURE
+            response_data['message'] = f"Task failure: {str(raw_info) if raw_info else 'Internal execution crash'}"
+            response_data['percent'] = 100
+        elif task_state == states.SUCCESS:
+            response_data['message'] = 'Task completed successfully.'
+            response_data['percent'] = 100
+
+    if response_data['state'] == states.SUCCESS:
+        response_data['percent'] = 100
+
+    return response_data
+
+
+# @admin.register(WaterLevelForecastsExperimentals)
+# class WaterLevelForecastsExperimentalsAdmin(admin.ModelAdmin, ExportCsvMixin):
+#     list_display = ('display_station_id', 'station_code', 'station_name', 'forecast_date', 'waterlevel_min', 'waterlevel_max', 'waterlevel_mean')
+#     list_filter = ('forecast_date',)
+#     search_fields = ('station_id__name', 'station_id__station_code')
+#     list_per_page = 25
+#     ordering = ('station_id_id',)
+
+#     change_list_template = "admin/data_load/waterlevelforecastsexperimental/change_list.html" # Path for the changelist template
+
+#     def get_urls(self):
+#         urls = super().get_urls()
+#         custom_urls = [
+#             # URL for importing experimental forecast CSVs (uses same form)
+#             path('import-csv/', self.admin_site.admin_view(self.import_experimental_forecast_csv), name='experimental-forecast-import-csv'),
+#             # URL for polling task status for experimental forecasts
+#             path('task-status-experimental/<str:task_id>/', self.admin_site.admin_view(self.task_status_experimental_view), name='task_status_experimental'),
+#         ]
+#         return custom_urls + urls
+
+#     def import_experimental_forecast_csv(self, request):
+#         logger.info("Starting import_experimental_forecast_csv at %s", datetime.now())
+        
+#         if request.method == "POST":
+#             logger.info("Received POST request for experimental forecast CSV import")
+#             form = ForecastCsvImportForm(request.POST, request.FILES) # Use the same form for multiple files
+
+#             if not form.is_valid():
+#                 logger.error(f"Invalid form data: {form.errors.as_json()}")
+#                 messages.error(request, f"Invalid form data: {form.errors.as_text()}")
+#                 return JsonResponse({"error": "Invalid form data", "details": form.errors.as_json()}, status=400)
+
+#             uploaded_files = form.cleaned_data.get('forecast_csv_file', [])
+#             noOfFiles = len(uploaded_files)
+#             logger.info(f"Received {noOfFiles} files: {[f.name for f in uploaded_files]}")
+
+#             if noOfFiles == 0:
+#                 logger.error("No files uploaded")
+#                 messages.error(request, "No files were uploaded.")
+#                 return JsonResponse({"error": "No files uploaded"}, status=400)
+
+#             station_name_to_id_map = {}
+#             for s in Station.objects.all():
+#                 if s.name:
+#                     normalized_db_name = s.name.strip().replace(' ', '').lower()
+#                     station_name_to_id_map[normalized_db_name] = s.station_id
+#             logger.info(f"Station name to ID map built: {station_name_to_id_map}")
+
+#             station_aliases = {
+
+#                 'elasinghat': 'elasin',
+#                 'elashinghat': 'elasin',
+#                 'hardinge-bridge':'hardinge-rb',
+#                 'hardinge':'hardinge-rb',
+#                 'sureshwar':'sureshswar'
+
+#             }
+#             logger.info(f"Custom station aliases: {station_aliases}")
+            
+#             dispatched_task_ids_with_filenames = []
+#             tasks_dispatched_count = 0
+
+#             for f in uploaded_files:
+#                 try:
+#                     file_station_name = os.path.splitext(f.name)[0].strip().replace(' ', '').lower()
+#                     logger.info(f"Processing file: {f.name}, derived station_name: {file_station_name}")
+
+#                     if file_station_name in station_aliases:
+#                         file_station_name = station_aliases[file_station_name]
+                        
+#                     if file_station_name not in station_name_to_id_map:
+#                         error_msg = f"Station '{file_station_name}' derived from filename '{f.name}' not found in mapping. Skipping this file."
+#                         logger.error(error_msg)
+#                         messages.warning(request, error_msg)
+#                         continue
+
+#                     file_obj = f.read()
+#                     pd_csv = io.BytesIO(file_obj)
+#                     # --- UPDATED: skiprows=2 and delimiter=',' for experimental files ---
+#                     forecastDF = pd.read_csv(pd_csv, skiprows=1, encoding='utf-8-sig', delimiter=',')
+                    
+#                     logger.info(f"DataFrame for {f.name} columns: {forecastDF.columns.tolist()}")
+
+#                     # Dispatch to the new experimental forecast task
+#                     task = import_experimental_forecast_files.delay(1, forecastDF.to_dict(), station_name_to_id_map, file_station_name)
+#                     dispatched_task_ids_with_filenames.append({'id': task.id, 'name': f.name})
+#                     tasks_dispatched_count += 1
+#                     logger.info(f"Started import_experimental_forecast_files task with ID: {task.id} for file: {f.name}")
+#                 except Exception as e:
+#                     logger.error(f"Error processing file {f.name}: {str(e)}", exc_info=True)
+#                     messages.error(request, f"Error processing file {f.name}: {str(e)}")
+#                     continue
+
+#             if dispatched_task_ids_with_filenames:
+#                 messages.success(request, f"Started import tasks for {tasks_dispatched_count} of {noOfFiles} files.")
+#                 return JsonResponse({
+#                     "task_ids": dispatched_task_ids_with_filenames,
+#                     "total_files": noOfFiles,
+#                     "message": f"Started processing {tasks_dispatched_count} file(s)"
+#                 })
+#             else:
+#                 messages.error(request, "No tasks were started. Please check the uploaded files and try again.")
+#                 return JsonResponse({"error": "No tasks started"}, status=400)
+
+#         logger.info("Rendering experimental forecast CSV import form")
+#         form = ForecastCsvImportForm()
+#         # Reusing the multiple_csv_upload template
+#         context = self.admin_site.each_context(request)
+#         context['title'] = 'Upload Experimental Water Level Forecasts CSV'
+#         context['form'] = form
+#         context['opts'] = self.model._meta
+#         # Crucially, pass the correct task status URL name for the JS
+#         context['task_status_url_name'] = 'admin:task_status_experimental' 
+#         return render(request, "admin/multiple_csv_upload.html", context)
+
+
+
+#     # Re-using the shared helper for status view
+#     def task_status_experimental_view(self, request, task_id):
+#         return JsonResponse(_get_task_status_response_data(task_id, 'admin:task_status_experimental'))
+
+
+#     def get_queryset(self, request):
+#         qs = super().get_queryset(request)
+#         return qs.select_related('station_id').exclude(station_id__isnull=True)
+
+#     def display_station_id(self, obj):
+#         return obj.station_id_id if obj.station_id else None
+#     display_station_id.short_description = 'Station ID'
+#     display_station_id.admin_order_field = 'station_id_id'
+
+#     def station_name(self, obj):
+#         return obj.station_id.name if obj.station_id else 'Unknown'
+#     station_name.short_description = 'Name'
+
+#     def station_code(self, obj):
+#         return obj.station_id.station_code if obj.station_id else None
+#     station_code.short_description = 'Station Code'
 
 # Custom Admin for RainfallObservation
 @admin.register(RainfallObservation)
@@ -999,6 +1220,42 @@ admin.site.register(MonsoonConfig, MonsoonConfigAdmin)
 from .models import ScheduledTask
 from data_load.tasks import generate_flood_alerts_task
 
+# @admin.register(ScheduledTask)
+# class ScheduledTaskAdmin(admin.ModelAdmin):
+#     list_display = ('task_name', 'is_enabled', 'description')
+#     list_filter = ('is_enabled',)
+#     search_fields = ('task_name', 'description')
+#     list_editable = ('is_enabled',)
+
+#     # Adds the custom URL for our button
+#     def get_urls(self):
+#         urls = super().get_urls()
+#         custom_urls = [
+#             path(
+#                 'run-flood-alerts/',
+#                 self.admin_site.admin_view(self.run_flood_alerts_view),
+#                 name='run-flood-alerts'
+#             ),
+#         ]
+#         return custom_urls + urls
+
+#     # The view that runs the flood alert task
+#     def run_flood_alerts_view(self, request):
+#         if not request.user.is_staff:
+#             messages.error(request, "You do not have permission to run this command.")
+#         elif request.method == 'POST':
+#             try:
+#                 generate_flood_alerts_task.delay()
+#                 messages.success(request, "Flood alert generation started in the background.")
+#             except Exception as e:
+#                 messages.error(request, f"Error starting flood alert task: {str(e)}")
+        
+#         # Redirect back to the main admin dashboard
+#         return HttpResponseRedirect('/admin/')
+
+
+
+
 @admin.register(ScheduledTask)
 class ScheduledTaskAdmin(admin.ModelAdmin):
     list_display = ('task_name', 'is_enabled', 'description')
@@ -1006,31 +1263,67 @@ class ScheduledTaskAdmin(admin.ModelAdmin):
     search_fields = ('task_name', 'description')
     list_editable = ('is_enabled',)
 
-    # Adds the custom URL for our button
     def get_urls(self):
         urls = super().get_urls()
         custom_urls = [
-            path(
-                'run-flood-alerts/',
-                self.admin_site.admin_view(self.run_flood_alerts_view),
-                name='run-flood-alerts'
-            ),
+            # Keep your existing redirect view
+            path('run-flood-alerts/', self.admin_site.admin_view(self.run_flood_alerts_view), name='run-flood-alerts'),
+            
+            # AJAX-friendly views for the Dashboard Buttons
+            path('run-flood-summary-json/', self.admin_site.admin_view(self.run_flood_summary_json), name='run-flood-summary-json'),
+            path('run-rainfall-map-json/', self.admin_site.admin_view(self.run_rainfall_map_json), name='run-rainfall-map-json'),
+            # ADD THIS LINE:
+            path('run-flood-alerts-json/', self.admin_site.admin_view(self.run_flood_alerts_json), name='run-flood-alerts-json'),
         ]
         return custom_urls + urls
 
-    # The view that runs the flood alert task
+    # --- Existing View (Redirects) ---
     def run_flood_alerts_view(self, request):
         if not request.user.is_staff:
-            messages.error(request, "You do not have permission to run this command.")
+            messages.error(request, "You do not have permission.")
         elif request.method == 'POST':
             try:
                 generate_flood_alerts_task.delay()
-                messages.success(request, "Flood alert generation started in the background.")
+                messages.success(request, "Flood alert generation started.")
             except Exception as e:
-                messages.error(request, f"Error starting flood alert task: {str(e)}")
-        
-        # Redirect back to the main admin dashboard
+                messages.error(request, f"Error: {str(e)}")
         return HttpResponseRedirect('/admin/')
+
+    
+    @method_decorator(csrf_protect)
+    @method_decorator(require_POST)
+    def run_flood_alerts_json(self, request):
+        """NEW: View to trigger Flood Alerts with Progress Bar support"""
+        if not request.user.is_staff:
+            return JsonResponse({'status': 'error', 'message': "Unauthorized"}, status=403)
+        try:
+            from .tasks import generate_flood_alerts_task
+            task = generate_flood_alerts_task.delay()
+            return JsonResponse({'status': 'success', 'task_id': task.id, 'message': 'Flood Alerts task started.'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    @method_decorator(csrf_protect)
+    @method_decorator(require_POST)
+    def run_flood_summary_json(self, request):
+        if not request.user.is_staff:
+            return JsonResponse({'status': 'error', 'message': "Unauthorized"}, status=403)
+        try:
+            task = generate_flood_summary_task.delay()
+            return JsonResponse({'status': 'success', 'task_id': task.id, 'message': 'Flood Summary task started.'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
+
+    @method_decorator(csrf_protect)
+    @method_decorator(require_POST)
+    def run_rainfall_map_json(self, request):
+        if not request.user.is_staff:
+            return JsonResponse({'status': 'error', 'message': "Unauthorized"}, status=403)
+        try:
+            task = generate_rainfall_map_task.delay()
+            return JsonResponse({'status': 'success', 'task_id': task.id, 'message': 'Rainfall Map task started.'})
+        except Exception as e:
+            return JsonResponse({'status': 'error', 'message': str(e)}, status=500)
 
 
 from .models import DistrictFloodAlertAutoUpdate 
@@ -1041,3 +1334,22 @@ admin.site.register(DistrictFloodAlertAutoUpdate, DistrictFloodAlertAutoUpdateAd
 
 from .models import JsonEntry
 admin.site.register(JsonEntry)
+
+
+
+# Adding SMS-API Interface in Admin 
+
+
+from django.contrib import admin
+from .models import BulletinRelatedManue
+
+@admin.register(BulletinRelatedManue)
+class BulletinRelatedManueAdmin(admin.ModelAdmin):
+    # Fields to display in the admin list view
+    list_display = ('title', 'title_bn', 'url')
+    
+    # Add a search bar for titles
+    search_fields = ('title', 'title_bn')
+    
+    # Optional: Add filters if you expect many entries
+    list_filter = ('title',)

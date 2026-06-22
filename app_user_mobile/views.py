@@ -1,6 +1,6 @@
 import requests
 import json
-
+import time
 from rest_framework.permissions import IsAuthenticated
 from rest_framework import status
 from rest_framework.views import APIView
@@ -9,7 +9,23 @@ from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.utils import timezone
 from datetime import timedelta
+import paramiko
+import shlex
 
+from rest_framework_simplejwt.authentication import JWTAuthentication
+from rest_framework.authentication import SessionAuthentication
+
+
+from django.utils.decorators import method_decorator
+from django.views.decorators.csrf import csrf_exempt
+
+
+from data_load.models import RainfallStation, RainfallObservation
+from django.utils.dateparse import parse_date
+
+
+from django.conf import settings
+from django.http import JsonResponse
 
 from app_user_mobile.models import (
     MobileAuthUser, OTP,
@@ -24,13 +40,12 @@ from app_user_mobile.authentication import (
     
 )
 
+
+from rest_framework_simplejwt.authentication import JWTAuthentication
+
+
 from django.conf import settings
 ECMWF_BASE_URL = settings.BASE_DIR
-
-
-
-
-
 
 
 
@@ -60,48 +75,148 @@ class BulkSMSClient:
             return None
 
 
+# class SendOTPView(APIView):
+#     def post(self, request):
+#         serializer = SendOTPSerializer(data=request.data)
+#         if serializer.is_valid():
+#             mobile_number = serializer.validated_data['mobile_number']
+            
+#             mobile_user_count = MobileAuthUser.objects.filter(
+#                 mobile_number = mobile_number
+#             ).count()
+#             if mobile_user_count < 1:
+#                 return Response({
+#                     'message': f'{mobile_number} is unauthorized. Please contact with Admin',  
+#                 }, status=status.HTTP_200_OK)
+            
+#             # Generate OTP
+#             otp_instance = OTP.generate_otp(mobile_number)
+            
+#             with open(ECMWF_BASE_URL / 'env.json', 'r') as envf:
+#                 env_ = json.load(envf)
+#             BULK_SMS_CONF = env_['bulk_sms_send']
+#             url = BULK_SMS_CONF["URL"]    
+#             api_key = BULK_SMS_CONF["API_KEY"]    
+#             senderid = BULK_SMS_CONF["SENDER_ID"] 
+            
+#             sms_client = BulkSMSClient(
+#                 api_key=api_key,
+#                 senderid=senderid,
+#                 url=url
+#             )
+
+#             # response = sms_client.send_otp("017XXXXXXXX", "123456")
+#             response = sms_client.send_otp(mobile_number, otp_instance.otp)
+#             response_dict = json.loads(response)
+#             # print(response_dict)
+            
+#             return Response({
+#                 'message': 'OTP sent successfully',
+#                 'otp': otp_instance.otp,  # Remove this in production
+#                 'sender_response': response_dict,  # Remove this in production
+#             }, status=status.HTTP_200_OK)
+            
+#         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
 class SendOTPView(APIView):
+    def gen_client_trans_id(self):
+        return f"TXN{int(time.time() * 1000)}"
+
     def post(self, request):
         serializer = SendOTPSerializer(data=request.data)
-        if serializer.is_valid():
-            mobile_number = serializer.validated_data['mobile_number']
-            
-            mobile_user_count = MobileAuthUser.objects.filter(
-                mobile_number = mobile_number
-            ).count()
-            if mobile_user_count < 1:
-                return Response({
-                    'message': f'{mobile_number} is unauthorized. Please contact with Admin',  
-                }, status=status.HTTP_200_OK)
-            
-            # Generate OTP
-            otp_instance = OTP.generate_otp(mobile_number)
-            
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        mobile_number = serializer.validated_data['mobile_number']
+        
+        if MobileAuthUser.objects.filter(mobile_number=mobile_number).count() < 1:
+            return Response({
+                'message': f'{mobile_number} is unauthorized.'
+            }, status=status.HTTP_403_FORBIDDEN)
+
+
+        otp_instance = OTP.generate_otp(mobile_number)
+        otp_text = f"Your OTP is: {otp_instance.otp}"
+
+   
+        try:
             with open(ECMWF_BASE_URL / 'env.json', 'r') as envf:
                 env_ = json.load(envf)
-            BULK_SMS_CONF = env_['bulk_sms_send']
-            url = BULK_SMS_CONF["URL"]    
-            api_key = BULK_SMS_CONF["API_KEY"]    
-            senderid = BULK_SMS_CONF["SENDER_ID"] 
-            
-            sms_client = BulkSMSClient(
-                api_key=api_key,
-                senderid=senderid,
-                url=url
+            gp_conf = env_['gp_sms_conf']
+            ssh_conf = env_['bdserver_site_235_ssh_conf']
+        except Exception as e:
+            return Response({'error': str(e)}, status=500)
+
+
+        payload_json = json.dumps({
+            "username": gp_conf["username"],
+            "password": gp_conf["password"],
+            "apicode": gp_conf["apicode"],
+            "msisdn": [str(mobile_number)],
+            "countrycode": "880",
+            "cli": gp_conf["cli"],
+            "messagetype": "1",
+            "message": otp_text,
+            "clienttransid": self.gen_client_trans_id(),
+            "bill_msisdn": gp_conf["bill_msisdn"],
+            "tran_type": gp_conf["tran_type"],
+            "request_type": gp_conf["request_type"],
+            "rn_code": gp_conf["rn_code"]
+        })
+
+
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        
+        try:
+            ssh.connect(
+                hostname=ssh_conf["HOST"],
+                username=ssh_conf["USER"],
+                password=ssh_conf["PASSWORD"],
+                look_for_keys=False,
+                allow_agent=False,
+                timeout=20
             )
 
-            # response = sms_client.send_otp("017XXXXXXXX", "123456")
-            response = sms_client.send_otp(mobile_number, otp_instance.otp)
-            response_dict = json.loads(response)
-            # print(response_dict)
+            curl_cmd = f"curl -s -X POST {gp_conf['url']} -H 'Content-Type: application/json' -d {shlex.quote(payload_json)}"
+            stdin, stdout, stderr = ssh.exec_command(curl_cmd)
+            response_raw = stdout.read().decode().strip()
+            ssh.close()
+
+            if not response_raw:
+                return Response({'message': 'No response from Gateway'}, status=502)
+
+            gp_data = json.loads(response_raw)
+            status_info = gp_data.get('statusInfo', {})
             
+
+            raw_code = status_info.get('statusCode', '0')
+            description = status_info.get('errordescription', '')
+            
+
+            is_success = (raw_code == "1000")
+            
+            mapped_response = {
+                "response_code": int(raw_code),
+                "success_message": description if is_success else "",
+                "error_message": "" if is_success else description
+            }
+
             return Response({
-                'message': 'OTP sent successfully',
-                'otp': otp_instance.otp,  # Remove this in production
-                'sender_response': response_dict,  # Remove this in production
+                "message": "OTP sent successfully" if is_success else "OTP sending failed",
+                "otp": otp_instance.otp,
+                "sender_response": mapped_response
             }, status=status.HTTP_200_OK)
-            
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        except Exception as e:
+            return Response({
+                "message": "Bridge connection error",
+                "sender_response": {
+                    "response_code": 500,
+                    "success_message": "",
+                    "error_message": str(e)
+                }
+            }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class VerifyOTPView(APIView):
@@ -228,3 +343,233 @@ class SimpleFCMTokenLocationAPI(APIView):
             "lat": location_record.lat,
             "long": location_record.long
         }, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)
+
+
+
+
+
+# Leotech-Rimes-SMS - API VIEW
+
+
+def get_hydro_data(request):
+    """
+    Fetches Hydro Data. 
+    URL format: /api/hydro-data/?station_id=SW351&from_date=2026-03-01&to_date=2026-03-15
+    """
+    # 1. Capture query parameters
+    station_id = request.GET.get('station_id')
+    from_date = request.GET.get('from_date')
+    to_date = request.GET.get('to_date')
+
+    # 2. Validation: Ensure no parameters are missing
+    if not all([station_id, from_date, to_date]):
+        return JsonResponse({
+            "error": "Missing required query parameters",
+            "required": ["station_id", "from_date", "to_date"]
+        }, status=400)
+
+    # 3. Setup External Request
+    url = f"{settings.FFWC_BASE_URL}/station_wise_data_by_date_range.php"
+    headers = {"Authorization": f"Bearer {settings.FFWC_TOKEN}"}
+    payload = {
+        "station_id": station_id,
+        "from_date": from_date,
+        "to_date": to_date
+    }
+
+    try:
+        # FFWC expects form-data (data=payload)
+        response = requests.post(url, headers=headers, data=payload, timeout=15)
+        return JsonResponse(response.json(), safe=False)
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({"error": "FFWC API connection failed", "details": str(e)}, status=502)
+
+def get_hydro_hourly_data(request):
+    """
+    Acts as a proxy to fetch hourly data from FFWC API.
+    URL format: /api/hydro-hourly/?station_id=SW351&hour=72
+    """
+    # 1. Capture query parameters from the user's request
+    station_id = request.GET.get('station_id')
+    hour = request.GET.get('hour', 72) # Default to 72 if not provided
+
+    # 2. Validation
+    if not station_id:
+        return JsonResponse({
+            "error": "Missing required query parameter: station_id"
+        }, status=400)
+
+    # 3. Setup External Request to FFWC
+    # Using the hourly endpoint provided in your Postman example
+    url = f"{settings.FFWC_BASE_URL}/station_wise_data_by_hour_range.php"
+    headers = {"Authorization": f"Bearer {settings.FFWC_TOKEN}"}
+    payload = {
+        "station_id": station_id,
+        "hour": hour
+    }
+
+    try:
+        # Send POST request to FFWC (FFWC APIs usually expect data/form-data)
+        response = requests.post(url, headers=headers, data=payload, timeout=15)
+        
+        # Return the exact JSON response from FFWC back to the user
+        return JsonResponse(response.json(), safe=False)
+        
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({
+            "error": "FFWC API connection failed", 
+            "details": str(e)
+        }, status=502)
+
+
+def get_sms_list(request):
+    """
+    Fetches SMS list.
+    URL format: /api/sms-list/?source=01751330394&datefrom=2025-01-01&dateto=2026-04-08
+    """
+    # 1. Capture query parameters
+    source = request.GET.get('source')
+    date_from = request.GET.get('datefrom')
+    date_to = request.GET.get('dateto')
+
+    # 2. Validation
+    if not all([source, date_from, date_to]):
+        return JsonResponse({
+            "error": "Missing required query parameters",
+            "required": ["source", "datefrom", "dateto"]
+        }, status=400)
+
+    # 3. Setup External Request
+    url = f"{settings.SMS_BASE_URL}/sms/list"
+    payload = {
+        "userid": settings.SMS_USERID,
+        "apikey": settings.SMS_APIKEY,
+        "source": source,
+        "datefrom": date_from,
+        "dateto": date_to
+    }
+
+    try:
+        # SMS API expects raw JSON (json=payload)
+        response = requests.post(url, json=payload, timeout=15)
+        return JsonResponse(response.json(), safe=False)
+    except requests.exceptions.RequestException as e:
+        return JsonResponse({"error": "SMS Gateway unreachable", "details": str(e)}, status=502)
+
+
+
+
+
+
+# Add to app_user_mobile/views.py
+
+# from .serializers import VendorWLPushSerializer
+from .services import process_vendor_wl_logic # Ensure this service is created as discussed
+from .authentication import StaticTokenAuthentication
+from .services import process_bulk_water_level
+from .serializers import VendorBulkPushSerializer
+
+class VendorWLPushAPIView(APIView):
+    authentication_classes = [StaticTokenAuthentication, JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        # Use the new Bulk Serializer
+        serializer = VendorBulkPushSerializer(data=request.data)
+        
+        if serializer.is_valid():
+            v_data = serializer.validated_data
+            mode = v_data.get('mode', 'fill_missing')
+            data_list = v_data['data']
+            
+            # Call the updated bulk service logic
+            success, result = process_bulk_water_level(data_list, mode)
+            
+            if success:
+                return Response({
+                    "status": "Success", 
+                    "processed_records": result['total'],
+                    "details": result['details']
+                }, status=status.HTTP_201_CREATED)
+            
+            return Response({"status": "Failed", "message": result}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+from .services import process_bulk_rainfall_data
+class VendorRainfallPushAPIView(APIView):
+    """
+    API endpoint for vendors to push Rainfall data.
+    """
+    authentication_classes = [StaticTokenAuthentication, JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = VendorBulkPushSerializer(data=request.data)
+        if serializer.is_valid():
+            mode = serializer.validated_data.get('mode', 'fill_missing')
+            data_list = serializer.validated_data['data']
+            
+            # Call the Rainfall service
+            success, result = process_bulk_rainfall_data(data_list, mode)
+            
+            return Response({
+                "status": "Success",
+                "table": "RainfallObservation",
+                "processed_records": result['total'],
+                "details": result['details']
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+
+class VendorWLHourlyPushAPIView(APIView):
+    """
+    API endpoint specifically for Hourly Water Level syncs.
+    """
+    authentication_classes = [StaticTokenAuthentication, JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = VendorBulkPushSerializer(data=request.data)
+        if serializer.is_valid():
+            mode = serializer.validated_data.get('mode', 'fill_missing')
+            data_list = serializer.validated_data['data']
+            
+            # Reusing the Water Level service logic
+            success, result = process_bulk_water_level(data_list, mode)
+            
+            return Response({
+                "status": "Hourly Sync Completed",
+                "processed_records": result['total'],
+                "details": result['details']
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class VendorRainfallHourlyPushAPIView(APIView):
+    """
+    API endpoint specifically for Hourly Rainfall syncs.
+    """
+    authentication_classes = [StaticTokenAuthentication, JWTAuthentication, SessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        serializer = VendorBulkPushSerializer(data=request.data)
+        if serializer.is_valid():
+            mode = serializer.validated_data.get('mode', 'fill_missing')
+            data_list = serializer.validated_data['data']
+            
+            # Reusing the Rainfall service logic (inserts into RainfallObservation)
+            success, result = process_bulk_rainfall_data(data_list, mode)
+            
+            return Response({
+                "status": "Hourly Rainfall Sync Completed",
+                "processed_records": result['total'],
+                "details": result['details']
+            }, status=status.HTTP_201_CREATED)
+
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

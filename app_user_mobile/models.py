@@ -8,7 +8,7 @@ from django.contrib.auth.models import AbstractBaseUser, BaseUserManager
 from django.core.validators import RegexValidator
 from django.utils import timezone
 
-
+from data_load.models import WaterLevelObservation
 
 
 
@@ -72,7 +72,9 @@ class MobileAuthUser(AbstractBaseUser):
             return self.last_name
         return ""
     
-    
+    class Meta: 
+        verbose_name = "Auth User"
+        verbose_name_plural = "Auth Users" 
     
     
 
@@ -129,3 +131,35 @@ class FCMTokenWiseUpdatedLatLon(models.Model):
     class Meta: 
         verbose_name = "FCM Token Wise Updated Lat Lon"
         verbose_name_plural = "FCM Tokens Wise Updated Lat Lon" 
+
+
+
+
+# Adding Proxy Model WaterlevelObservation for SMS API Interface
+
+class WaterLevelSync(WaterLevelObservation):
+    class Meta:
+        proxy = True
+        # This prevents Django from creating a new table in the DB
+        verbose_name = "LEOTECH SMS (Waterlevel) API Sync"
+        verbose_name_plural = "LEOTECH SMS (Waterlevel) API Sync"
+
+
+from data_load.models import RainfallObservation
+
+class RainfallSync(RainfallObservation):
+    class Meta:
+        proxy = True
+        verbose_name = "LEOTECH SMS(Rainfall) API Sync"
+        verbose_name_plural = "LEOTECH SMS(Rainfall) API Sync"
+
+
+# Adding Saims API
+
+class SMSSync(models.Model):
+    """A dummy model for the SMS Sync Admin interface"""
+    class Meta:
+        managed = False
+        verbose_name = "RIMES SMS (Data Parser & Sync)"
+        verbose_name_plural = "RIMES SMS (Data Parser & Sync)"
+        

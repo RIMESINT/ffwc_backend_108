@@ -1,0 +1,102 @@
+  GNU nano 7.2                                                     api3.ffwc.gov.bd                                                              
+server {
+    if ($host = api.ffwc.gov.bd) {
+        return 301 https://$host$request_uri;
+    } # managed by Certbot
+
+
+    listen 80;
+    server_name api.ffwc.gov.bd;
+    return 301 https://$server_name$request_uri;
+
+
+}
+
+server {
+    server_name api.ffwc.gov.bd;
+    listen 443 ssl;
+    ssl_certificate /etc/letsencrypt/live/api.ffwc.gov.bd/fullchain.pem; # managed by Certbot
+    ssl_certificate_key /etc/letsencrypt/live/api.ffwc.gov.bd/privkey.pem; # managed by Certbot
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    client_max_body_size 100M;
+
+    proxy_read_timeout 600s;
+    client_body_timeout 600s;
+    send_timeout 600s;
+
+    access_log /var/log/nginx/ffwc_django_rebase_access.log;
+    error_log /var/log/nginx/ffwc_django_rebase_error.log;
+
+    location / {
+        include proxy_params;
+        proxy_pass http://unix:/home/rimes/ffwc-rebase/backend/ffwc_django_project/ffwc_django_project.sock;
+
+
+        proxy_set_header x-ffwc-internal-key $http_x_ffwc_internal_key;
+
+        # Pass the Referer for the Domain Lock logic
+        proxy_set_header Referer $http_referer;
+
+#        proxy_set_header Host api3.ffwc.gov.bd;
+#        proxy_set_header X-Real-IP $remote_addr;
+#        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+#        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+
+        location ^~ /assets/ {
+        alias /home/rimes/ffwc-rebase/backend/ffwc_django_project/assets/;
+
+        # Add headers to ensure browsers can display the PDF
+
+        set $cors_origin "";
+        if ($http_origin ~* "^(https://ffwc\.gov\.bd|http://localhost:4200|http://127\.0.0.1:4200)$") {
+            set $cors_origin $http_origin;
+        }
+
+
+        # 2. Apply the dynamic origin header
+        add_header Access-Control-Allow-Origin $cors_origin always;
+        add_header Access-Control-Allow-Methods "GET, OPTIONS, HEAD" always;
+
+
+        # 3. CRITICAL: Must include 'x-ffwc-internal-key' in allowed headers
+        # because your Angular app is sending it in every request.
+        add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Range, x-ffwc-internal-key" always;
+        add_header Access-Control-Expose-Headers "Content-Length, Content-Range" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+
+
+        include mime.types;
+        types {
+                application/json geojson;
+        }
+
+        if ($request_method = 'OPTIONS') {
+
+            #add_header Access-Control-Allow-Origin "https://ffwc.gov.bd" always;
+            add_header Access-Control-Allow-Origin $cors_origin always;
+            add_header Access-Control-Allow-Methods "GET, OPTIONS, HEAD" always;
+            add_header Access-Control-Allow-Headers "Origin, X-Requested-With, Content-Type, Accept, Range, x-ffwc-internal-key" always;
+            add_header Content-Length 0;
+            add_header Content-Type text/plain;
+            return 204;
+
+        }
+
+        autoindex off;
+
+    }
+
+
+    location /static {
+        alias /home/rimes/ffwc-rebase/backend/ffwc_django_project/static;
+    }
+
+    location /media {
+        alias /home/rimes/ffwc-rebase/backend/ffwc_django_project/assets;
+    }
+
+}

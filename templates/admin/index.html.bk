@@ -1,0 +1,250 @@
+{% extends "admin/base_site.html" %}
+{% load i18n static %}
+
+{% block extrastyle %}
+    {{ block.super }}
+    <link rel="stylesheet" href="{% static "admin/css/dashboard.css" %}">
+    <style>
+        /* New styles to mimic Django Admin's .module structure */
+        .custom-admin-module {
+            width: 1400px;
+            margin-left: 70px;
+            margin-bottom: 20px; 
+            border: 1px solid #e0e0e0; 
+            border-radius: 4px; 
+            background-color: #fff; 
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05); 
+        }
+        .custom-admin-module h2 {
+            background-color: #417690; /* Dark blue/teal from admin header */
+            color: #fff;
+            padding: 10px 15px; /* Padding inside the header */
+            margin: 0; /* Remove default h2 margin */
+            font-size: 1.1em; /* Match admin header font size */
+            font-weight: normal; /* Match admin header font weight */
+            border-bottom: 1px solid #3c6b80; /* Slightly darker border below header */
+            border-top-left-radius: 4px; /* Match module border radius */
+            border-top-right-radius: 4px; /* Match module border radius */
+        }
+        .custom-admin-module-content {
+            padding: 15px; /* Padding for the content inside the module */
+            align-items: center;
+            gap: 20px;
+            display: flex;
+ ]
+        }
+
+        /* Style for the button within the module */
+        .custom-admin-module-content .generate-button {
+            background-color: #007bff; /* Primary blue */
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 500;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+        .custom-admin-module-content .generate-button:hover {
+            background-color: #0056b3;
+            transform: translateY(-1px);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.15);
+        }
+        .custom-admin-module-content .generate-button:active {
+            background-color: #004085;
+            transform: translateY(0);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+        }
+
+
+        /* Styles for the progress bar container - make it follow the module style */
+        #task-progress-container {
+            width: 1400px;
+            margin-left: 70px;
+            margin-top: 20px; /* Space between modules */
+            margin-bottom: 20px; /* Ensure space below progress container as well */
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background-color: #fff;
+            padding: 15px; /* Match module content padding */
+            display: none; /* Hidden by default */
+            flex-direction: column;
+            gap: 10px;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.05); /* Consistent shadow */
+            /* Removed width/margin-left for full width */
+        }
+        #progress-bar-wrapper {
+            background-color: #e9ecef;
+            border-radius: 5px;
+            overflow: hidden;
+            height: 25px; /* Standard height for progress bar */
+        }
+        #progress-bar {
+            width: 0%;
+            height: 100%;
+            background-color: #28a745; /* Green */
+            border-radius: 3px;
+            text-align: center;
+            line-height: 25px;
+            color: white;
+            font-weight: bold;
+            transition: width 0.4s ease-in-out;
+            font-size: 0.9em;
+        }
+        #progress-bar-message {
+            font-size: 0.9em;
+            color: #555;
+            text-align: center;
+        }
+        #task-completion-message {
+            font-size: 1em; /* Adjust font size */
+            font-weight: bold;
+            color: #28a745; /* Green for success */
+            margin-top: 5px; /* Adjust margin */
+            text-align: center;
+        }
+        #task-error-message {
+            font-size: 1em; /* Adjust font size */
+            font-weight: bold;
+            color: #dc3545; /* Red for errors */
+            margin-top: 5px; /* Adjust margin */
+            text-align: center;
+        }
+
+        /* Adjust the main content wrapper to be full width */
+        #content-main-wrapper { /* New ID for the div containing content-main */
+            
+            display: flex;
+            justify-content: space-between;
+            width: 1400px; 
+            margin-left: 70px;
+            /* Removed width: 1400px; margin-left: 70px; for full width */
+            align-items: flex-start;
+        }
+        /* Ensure content-main takes available space */
+        #content-main {
+            flex: 1; /* Allow it to grow */
+            /* Removed fixed flex: 1; for explicit style */
+        }
+
+    </style>
+{% endblock %}
+
+{% block coltype %}colMS{% endblock %}
+
+{% block bodyclass %}{{ block.super }} dashboard{% endblock %}
+
+{% block nav-breadcrumbs %}{% endblock %}
+
+{% block nav-sidebar %}{% endblock %}
+
+{% block content %}
+
+<div class="custom-admin-module">
+    <h2>Management Commands</h2>
+    <div class="custom-admin-module-content">
+        <button id="generateRainfallMapBtn" class="generate-button">Generate Rainfall Distribution Map</button>
+        </div>
+</div>
+
+<div id="task-progress-container">
+    <div id="progress-bar-wrapper">
+        <div id="progress-bar">0%</div>
+    </div>
+    <div id="progress-bar-message">Waiting for task to start...</div>
+    <div id="task-completion-message" style="display: none;"></div>
+    <div id="task-error-message" style="display: none;"></div>
+</div>
+
+<div id="content-main-wrapper">
+    <div id="content-main">
+        {% include "admin/app_list.html" with app_list=app_list show_changelinks=True %}
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extrahead %}
+    {{ block.super }}
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+    <script src="{% static 'celery_progress/celery_progress.js' %}"></script>
+    <script>
+        $(document).ready(function() {
+            var $generateButton = $('#generateRainfallMapBtn');
+            var $progressContainer = $('#task-progress-container');
+            var $progressBar = $('#progress-bar');
+            var $progressBarMessage = $('#progress-bar-message');
+            var $completionMessage = $('#task-completion-message');
+            var $errorMessage = $('#task-error-message');
+
+            $generateButton.on('click', function() {
+                // No confirm dialog
+                $generateButton.prop('disabled', true).text('Starting Task...');
+                // Reset/hide previous messages and progress
+                $progressContainer.hide();
+                $completionMessage.hide().text('');
+                $errorMessage.hide().text('');
+                $progressBar.css('width', '0%').text('0%');
+                $progressBarMessage.text('Sending request...');
+
+                $.ajax({
+                    url: '{% url "admin:run-rainfall-map" %}',
+                    type: 'POST',
+                    data: {
+                        'csrfmiddlewaretoken': $('input[name="csrfmiddlewaretoken"]').val()
+                    },
+                    success: function(response) {
+                        if (response.status === 'success' && response.task_id) {
+                            // No alert on success
+                            $progressContainer.show(); // Show progress bar
+                            $progressBarMessage.text('Task queued. Waiting for progress...');
+                            
+                            CeleryProgressBar.initProgressBar(
+                                '{% url "celery_progress:task_status" "00000000-0000-0000-0000-000000000000" %}'.replace('00000000-0000-0000-0000-000000000000', response.task_id),
+                                {
+                                    onProgress: function(progressBarElement, progressBarMessageElement, progress) {
+                                        $(progressBarElement).css('width', progress.percent + '%').text(Math.round(progress.percent) + '%'); // Round percentage
+                                        if (progress.description) {
+                                            $(progressBarMessageElement).text(progress.description);
+                                        } else {
+                                            $(progressBarMessageElement).text('Processing: ' + progress.current + ' of ' + progress.total + ' (' + Math.round(progress.percent) + '%)');
+                                        }
+                                    },
+                                    onSuccess: function(result, progressBarElement, progressBarMessageElement) {
+                                        $(progressBarElement).css('width', '100%').text('100%');
+                                        $(progressBarMessageElement).text('Task completed!');
+                                        $completionMessage.text(result.message || 'Task completed successfully!').show(); // Display on-page message
+                                        $generateButton.prop('disabled', false).text('Generate Rainfall Distribution Map');
+                                    },
+                                    onError: function(result, progressBarElement, progressBarMessageElement) {
+                                        $(progressBarElement).css('width', '100%').css('background-color', '#dc3545').text('Error!');
+                                        $(progressBarMessageElement).text('Task failed!');
+                                        $errorMessage.text(result.message || 'Task failed due to an error.').show(); // Display on-page message
+                                        $generateButton.prop('disabled', false).text('Generate Rainfall Distribution Map');
+                                    },
+                                }
+                            );
+
+                        } else {
+                            // Keep this alert for direct AJAX errors (e.g., server 500 before task starts)
+                            alert('Error: ' + (response.message || 'Unknown error occurred.'));
+                            $generateButton.prop('disabled', false).text('Generate Rainfall Distribution Map');
+                        }
+                    },
+                    error: function(xhr, status, error) {
+                        var errorMessage = "An AJAX error occurred.";
+                        if (xhr.responseJSON && xhr.responseJSON.message) {
+                            errorMessage += " " + xhr.responseJSON.message;
+                        } else {
+                            errorMessage += " Status: " + status + ", Error: " + error;
+                        }
+                        alert(errorMessage);
+                        $generateButton.prop('disabled', false).text('Generate Rainfall Distribution Map');
+                    },
+                });
+            });
+        });
+    </script>
+{% endblock %}

@@ -33,19 +33,26 @@
     </form>
 
     <div id="task-status-container" style="margin-top: 20px; padding: 15px; border: 1px solid #ccc; border-radius: 5px; background-color: #f9f9f9; display: none;">
-        <h3>Task Progress: <span id="task-message">Starting...</span></h3>
-        <div class="progress-bar" style="width: 100%; background-color: #e0e0e0; border-radius: 5px; overflow: hidden;">
-            <div id="progress-bar-fill" style="width: 0%; height: 25px; background-color: #4CAF50; border-radius: 5px; text-align: center; color: white; line-height: 25px; font-weight: bold;">0%</div>
+        <h3>Progress: <span id="task-message">Starting...</span></h3>
+        
+        <div class="progress-bar" style="width: 100%; background-color: #e0e0e0; border-radius: 5px; overflow: hidden; margin-bottom: 10px;">
+            <div id="progress-bar-fill" style="width: 0%; height: 25px; background-color: #2196F3; border-radius: 5px; text-align: center; color: white; line-height: 25px; font-weight: bold; transition: width 0.4s ease;">0%</div>
         </div>
-        <p id="progress-info" style="margin-top: 10px; font-size: 0.9em; color: #555;"></p>
-        <p style="margin-top: 10px;"><a href="{% url opts|admin_urlname:'changelist' %}" id="view-data-link" class="button" style="display: none; background-color: #007bff; color: white; padding: 8px 15px; text-decoration: none; border-radius: 4px;">View Processed Data</a></p>
-    </div>
 
+        <label style="font-weight: bold; font-size: 0.9em;">Import Logs:</label>
+        <div id="log-window" style="height: 250px; overflow-y: scroll; background: #222; color: #00FF00; padding: 10px; margin-top: 5px; font-family: monospace; font-size: 12px; border-radius: 5px; border: 2px solid #444;">
+            <div>> System ready...</div>
+        </div>
+
+        <p id="progress-info" style="margin-top: 10px; font-size: 0.9em; color: #555;"></p>
+        <p style="margin-top: 10px;">
+            <a href="{% url opts|admin_urlname:'changelist' %}" id="view-data-link" class="button" style="display: none; background-color: #007bff; color: white; padding: 8px 15px; text-decoration: none; border-radius: 4px;">View Processed Data</a>
+        </p>
+    </div>
 </div>
 
 <script>
     document.addEventListener('DOMContentLoaded', function() {
-        // Extract task_id from URL query parameters
         const urlParams = new URLSearchParams(window.location.search);
         const taskId = urlParams.get('task_id');
 
@@ -54,54 +61,61 @@
         const progressBarFillElem = document.getElementById('progress-bar-fill');
         const progressInfoElem = document.getElementById('progress-info');
         const viewDataLinkElem = document.getElementById('view-data-link');
+        const logWindow = document.getElementById('log-window');
+
+        let printedLogsCount = 0;
 
         if (taskId) {
-            taskStatusContainer.style.display = 'block'; // Show the progress container
+            taskStatusContainer.style.display = 'block';
 
             const pollTaskStatus = function() {
-                // Construct the URL dynamically using Django's reverse URL lookup
-                // Replace '__task_id__' placeholder with the actual taskId
                 const statusUrl = `{% url 'admin:task_status' task_id='__task_id__' %}`.replace('__task_id__', taskId);
 
                 fetch(statusUrl)
                     .then(response => response.json())
                     .then(data => {
-                        taskMessageElem.innerText = data.message;
+                        // Handle result source (Success state nests data in .result)
+                        let source = data;
+                        if (data.state === 'SUCCESS' && data.result) {
+                            source = data.result;
+                        }
+
+                        // 1. Log Streaming Logic
+                        if (source.console_logs && source.console_logs.length > printedLogsCount) {
+                            const newLogs = source.console_logs.slice(printedLogsCount);
+                            newLogs.forEach(log => {
+                                const div = document.createElement('div');
+                                div.textContent = `> ${log}`;
+                                // Color Updates Orange, Creations Green
+                                if (log.includes("Updated")) div.style.color = "#FFA500";
+                                logWindow.appendChild(div);
+                            });
+                            logWindow.scrollTop = logWindow.scrollHeight; // Auto-scroll
+                            printedLogsCount = source.console_logs.length;
+                        }
+
+                        // 2. Progress Bar Update
+                        taskMessageElem.innerText = source.message || data.state;
                         progressBarFillElem.style.width = data.percent + '%';
                         progressBarFillElem.innerText = data.percent + '%';
 
-                        // Adjust progress bar color based on state
                         if (data.state === 'FAILURE') {
-                            progressBarFillElem.style.backgroundColor = '#f44336'; // Red for error
+                            progressBarFillElem.style.backgroundColor = '#f44336';
+                            progressInfoElem.innerText = "Error: " + (source.message || "Task Failed");
                         } else if (data.state === 'SUCCESS') {
-                             progressBarFillElem.style.backgroundColor = '#4CAF50'; // Green for success
+                            progressBarFillElem.style.backgroundColor = '#4CAF50';
+                            progressInfoElem.innerText = "Processing Complete.";
+                            viewDataLinkElem.style.display = 'inline-block';
                         } else {
-                             progressBarFillElem.style.backgroundColor = '#2196F3'; // Blue for in-progress
-                        }
-
-
-                        if (data.state === 'PENDING' || data.state === 'STARTED' || data.state === 'PROGRESS') {
+                            progressBarFillElem.style.backgroundColor = '#2196F3';
                             progressInfoElem.innerText = `Status: ${data.state} (${data.current || 0}/${data.total || 0} rows)`;
-                            setTimeout(pollTaskStatus, 2000); // Poll every 2 seconds
-                        } else if (data.state === 'SUCCESS') {
-                            progressInfoElem.innerText = `Status: ${data.state}. Data processing complete.`;
-                            viewDataLinkElem.style.display = 'inline-block'; // Show link to data
-                            // You might want to automatically refresh the data view or redirect after a short delay
-                            // For example: setTimeout(() => window.location.href = viewDataLinkElem.href, 2000);
-                        } else if (data.state === 'FAILURE') {
-                            progressInfoElem.innerText = `Status: ${data.state}. Error: ${data.message}`;
-                            // No more polling on failure
+                            setTimeout(pollTaskStatus, 1500); 
                         }
                     })
                     .catch(error => {
-                        console.error('Error polling task status:', error);
-                        taskMessageElem.innerText = 'Error checking task status.';
-                        progressBarFillElem.style.backgroundColor = '#f44336'; // Red for error
-                        progressInfoElem.innerText = 'Failed to fetch task status. Check console for details.';
+                        console.error('Polling error:', error);
                     });
             };
-
-            // Start polling when the page loads if task_id is present
             pollTaskStatus();
         }
     });

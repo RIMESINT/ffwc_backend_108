@@ -5,11 +5,17 @@ from django.dispatch import receiver
 from data_load.models import Station
 from indian_stations.models import IndianStations
 
-
 class Profile(models.Model):  
-    user = models.OneToOneField(User, on_delete=models.CASCADE)
-    userProfileStations = models.ManyToManyField(Station, db_constraint=False)
-    userProfileIndianStations = models.ManyToManyField(IndianStations, db_constraint=False)
+    # Explicitly define the ID to match your database 'id' column
+    id = models.BigAutoField(primary_key=True)
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='profile')
+    userProfileStations = models.ManyToManyField(Station, db_constraint=False, blank=True)
+    userProfileIndianStations = models.ManyToManyField(IndianStations, db_constraint=False, blank=True)
+
+    class Meta:
+        managed = True
+        # THIS IS THE FIX: Link the Profile class to the table with your data
+        db_table = 'userauth_profile' 
 
     @receiver(post_save, sender=User)
     def create_user_profile(sender, instance, created, **kwargs):
@@ -18,21 +24,14 @@ class Profile(models.Model):
     
     @receiver(post_save, sender=User)
     def save_user_profile(sender, instance, **kwargs):
-        instance.profile.save()
+        if hasattr(instance, 'profile'):
+            instance.profile.save()
 
-class UserAuthProfile(models.Model):
-    id = models.BigAutoField(primary_key=True)
-    user = models.OneToOneField(User, on_delete=models.DO_NOTHING)
-
-    class Meta:
-        managed = True
-        db_table = 'userauth_userprofile'
-
+# Keep these two as they are
 class UserAuthProfileStations(models.Model):
     id = models.BigAutoField(primary_key=True)
     profile_id = models.BigIntegerField()
     station_id = models.BigIntegerField()
-
     class Meta:
         managed = True
         db_table = 'userauth_userprofile_stations'
@@ -42,7 +41,6 @@ class UserAuthProfileIndianStations(models.Model):
     id = models.BigAutoField(primary_key=True)
     profile_id = models.BigIntegerField()
     indianstations_id = models.BigIntegerField()
-
     class Meta:
         managed = True
         db_table = 'userauth_userprofile_indianstations'

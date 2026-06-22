@@ -3,6 +3,7 @@ import os,json
 from datetime import timedelta
 import pymysql
 pymysql.install_as_MySQLdb()
+# from corsheaders.defaults import default_headers
 
 
 DEBUG = True
@@ -14,17 +15,65 @@ ROOT_URLCONF = 'ffwc_django_project.urls'
 WSGI_APPLICATION = 'ffwc_django_project.wsgi.application'
 
 
-CORS_ALLOW_ALL_ORIGINS = True
-ALLOWED_HOSTS = ['*']
-CORS_ORIGIN_ALLOW_ALL = True
-CORS_ALLOW_METHODS = ('*',)  # Allow all HTTP methods
-CORS_ALLOW_HEADERS = ('*',)  # Allow all headers
-CORS_ALLOW_CREDENTIALS = True  # Allow credentials in cross-origin requests
+ALLOWED_HOSTS = [
+    'api.ffwc.gov.bd', 
+    'ffwc.gov.bd', 
+    
+    'nlas.dls.gov.bd',
+    
+    
+    'localhost', 
+    '127.0.0.1',
+    '0.0.0.0',
+    
+    ]
+
+
+CORS_ALLOW_ALL_ORIGINS = False
+
+CORS_ORIGIN_ALLOW_ALL = False
+
+CORS_ALLOWED_ORIGINS = [
+    "https://ffwc.gov.bd",
+    "https://www.ffwc.gov.bd",
+    "https://ffwc.bwdb.gov.bd",
+    
+    "https://nlas.dls.gov.bd",
+    "https://www.nlas.dls.gov.bd",
+    
+    "http://localhost:4200",
+    "http://127.0.0.1:4200"
+    ]
 
 CSRF_TRUSTED_ORIGINS = [
-    'https://api3.ffwc.gov.bd',
-    'https://ffwc.gov.bd'
+    "https://ffwc.gov.bd",
+    "https://www.ffwc.gov.bd",
+    
+    "https://nlas.dls.gov.bd",
+    "https://www.nlas.dls.gov.bd",
+    
+    "http://localhost:4200",
+    "http://127.0.0.1:4200"
 ]
+
+CORS_ALLOW_METHODS = ('*',)  
+
+
+CORS_ALLOW_HEADERS = ('*',)
+
+CORS_ALLOW_CREDENTIALS = True  # Allow credentials in cross-origin requests
+X_FRAME_OPTIONS = 'ALLOWALL'
+
+XS_SHARING_ALLOWED_METHODS = ['POST', 'GET', 'OPTIONS', 'PUT', 'DELETE']
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# SECURE_SSL_REDIRECT = True 
+SECURE_SSL_REDIRECT = False 
+SESSION_COOKIE_SECURE = False
+CSRF_COOKIE_SECURE = False
+
+
 
 
 # Application definition
@@ -46,6 +95,7 @@ INSTALLED_APPS = [
     'celery_progress',
 
     # Defined Apps
+    'core',
     'data_load',
     'indian_stations',
     'userauth',
@@ -62,7 +112,7 @@ INSTALLED_APPS = [
     'app_subscriptions',
     'app_visualization',
     'app_water_watch_mobile',
-    'app_mobile_static_data',
+    'app_mobile_static_data'
     
 ]
 
@@ -79,6 +129,10 @@ REST_FRAMEWORK = {
         'rest_framework.renderers.BrowsableAPIRenderer',
     ),
     
+    'DEFAULT_THROTTLE_RATES': {
+        'anon': '60/minute',
+    },
+
     'DEFAULT_FILTER_BACKENDS': ['django_filters.rest_framework.DjangoFilterBackend'],
     
     'TITLE': 'FFWC API VIEWS'
@@ -176,14 +230,21 @@ SIMPLE_JWT = {
 
 
 MIDDLEWARE = [
-    'corsheaders.middleware.CorsMiddleware',  # Added for CORS handling
+
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
+    
+    'corsheaders.middleware.CorsMiddleware', 
+
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
+
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+
+    'core.middleware.DomainLockedMiddleware'
+
 ]
 
 
@@ -256,3 +317,17 @@ CELERY_TIMEZONE = 'Asia/Dhaka' # IMPORTANT: Match your Django TIME_ZONE
 CELERY_TASK_TRACK_STARTED = True # Enable tracking task 'STARTED' state
 CELERY_TASK_STATUS_ON_EXCEPTION = True # Store task state as FAILURE on exception
 
+
+
+# FFWC-RIMES-LEOTECH API Configuration
+FFWC_BASE_URL = "https://sms.ffwc.gov.bd/hydro/api/data_share"
+FFWC_TOKEN = "9f7a71621336b31d92801f394c730470"
+
+# RIMES-FFWC SMS API Configuration
+SMS_BASE_URL = "http://114.31.28.82/api/v1"
+SMS_USERID = "urimes"
+SMS_APIKEY = "9a02481013b31c9d234d1b50f7d81087"
+
+
+
+VENDOR_API_KEY = "SECRET_9f7a71621336b31d92801f394c730470"

@@ -1,5 +1,7 @@
 from django.urls import path, include,re_path
 from rest_framework.routers import DefaultRouter
+from .views import ProxyRequestView
+
 from . import views as views
 
 from indian_stations import views as transView
@@ -172,10 +174,20 @@ urlpatterns = [
     path('monsoon-basin-wise-flash-flood/<slug:forecast_date>/<int:basin_id>',views.MonsoonFlashFlood,name='monsoon-basin-flash-flood'),
     path('monsoon-probabilistic-flash-flood/<slug:givenDate>/<int:basin_id>',views.MonsoonProbabilisticFlashFlood,name='monsoon-probabilistic-flash-flood'),
 
+
+    # ECMWF Premonsoon URLS
+    path('new-basin-wise-flash-flood/<slug:forecast_date>/<int:basin_id>',views.NewFlashFlood,name='new-basin-flash-flood'),
+    path('new-probabilistic-flash-flood/<slug:givenDate>/<int:basin_id>',views.NewProbabilisticFlashFlood,name='new-probabilistic-flash-flood'),
+
+
     path('ukmet-monsoon-basin-wise-flash-flood/<slug:forecast_date>/<int:basin_id>',views.UkMetMonsoonFlashFlood,name='ukmet-monsoon-basin-flash-flood'),
+    path('ukmet-pre-monsoon-basin-wise-flash-flood/<slug:forecast_date>/<int:basin_id>',views.UkMetPreMonsoonFlashFlood,name='ukmet-pre-monsoon-basin-flash-flood'),
+
     path('ukmet-monsoon-probabilistic-flash-flood/<slug:givenDate>/<int:basin_id>',views.UKMetMonsoonProbabilisticFlashFlood,name='ukmet-monsoon-probabilistic-flash-flood'),
+    path('ukmet-pre-monsoon-probabilistic-flash-flood/<slug:givenDate>/<int:basin_id>',views.UKMetPreMonsoonProbabilisticFlashFlood,name='ukmet-pre-monsoon-probabilistic-flash-flood'),
 
     path('bmd-wrf-forecast/<str:forecast_date>/<int:basin_id>/', views.BMDWRFMonsoonFlashFlood, name='bmd-wrf-monsoon-flash-flood'),
+    path('bmd-wrf-pre-monsoon-forecast/<str:forecast_date>/<int:basin_id>/', views.BMDWRFPreMonsoonFlashFlood, name='bmd-wrf-pre-monsoon-flash-flood'),
 
 
     path('threshold-based-flash-flood-model-options/', views.ThresholdBasedFlasFloodDorecastModelOptionsView, name='threshold-based-flash-flood-model-options'),
@@ -249,6 +261,16 @@ urlpatterns = [
         name='district-alerts-update' 
     ),
 
+    # path('v1/district_alerts_create_single/', views.DistrictFloodAlertCreateView.as_view(), name='district-alert-upsert'),
+    path('v1/district_alerts_create_single/', views.district_alerts_create_single, name='district-alert-upsert'),
+
+    path(
+        'v1/ens_model_choices_list/<int:station_id>/<str:date>/', 
+        views.EnsModelChoiceListAPI.as_view(), 
+        name='ens_model_choices_list'
+    ),
+
+
 
         # Endpoint for GET (listing all tasks)
     path('scheduled-tasks/', ScheduledTaskListView.as_view(), name='scheduled-task-list'),
@@ -278,4 +300,34 @@ urlpatterns = [
     path('flow-path/<str:lat>/<str:lng>',views.FlowPath,name='flow-path'),
     path('user-defined-basin/<str:lat>/<str:lng>',views.UserDefinedBasin,name='user-defined-basin'),
     path('sub-basin-precipitation/<str:lat>/<str:lng>',views.SubBasinPrecipiation,name='sub-basin-precipitation'),
+
+
+
+
+   # Endpoint for the full data
+    path('basin-wise-forecast/cumilla/latest/', views.get_latest_cumilla_forecast, name='cumilla_latest'),
+    # Endpoint to see ONLY the date/metadata
+    path('bsin-wise-forecast/cumilla/info/', views.get_forecast_metadata, name='cumilla_info'),
+
+    # Amalshid
+    path('basin-wise-forecast/amalshid/latest/', views.get_latest_amalshid_forecast, name='amalshid_latest'),
+    
+    # Sylhet
+    path('basin-wise-forecast/sylhet/latest/', views.get_latest_sylhet_forecast, name='sylhet_latest'),
+    
+    # Sunamganj
+    path('basin-wise-forecast/sunamganj/latest/', views.get_latest_sunamganj_forecast, name='sunamganj_latest'),
+
+    # Parshuram (Feni River)
+    path('basin-wise-forecast/parshuram/latest/', views.get_latest_parshuram_forecast, name='parshuram_latest'),
+    
+    path('basin-wise-forecast/dalia/latest/', views.get_latest_dalia_forecast, name='dalia_latest'),
+    
+    path('proxy/', ProxyRequestView.as_view(), name='proxy'),
+
+
+
+    # path('json/save/', views.save_json_file, name='save_json_file'),
+    # path('json/load/', views.load_json_file, name='load_json_file'),
+    
 ]
