@@ -133,13 +133,6 @@ class WaterLevelInputForMobileUser(models.Model):
     def save(self, *args, **kwargs):
         super().save(*args, **kwargs)
 
-        old_intance = None
-        if self.pk:
-            try:
-                old_intance = WaterLevelInputForMobileUser.objects.get(pk=self.pk)
-            except WaterLevelInputForMobileUser.DoesNotExist:
-                old_intance = None
-
         if self.is_approved:
             station_id = self.station.station_id if hasattr(self.station, 'station_id') else self.station_id
 
@@ -147,25 +140,15 @@ class WaterLevelInputForMobileUser(models.Model):
                 station_id_id=station_id,
                 observation_date=self.observation_date,
                 defaults={
-                    'water_level': -9999.00,
-                    'gauge_reader_water_level': self.water_level
+                    'water_level': self.water_level,
+                    'source': 'gauge'
                 }
             )
-            
+
             if not created:
-                observation.gauge_reader_water_level = self.water_level
-                observation.save(update_fields=['gauge_reader_water_level'])
-                
-        # If the record is rejected, clear the gauge_reader_water_level
-        elif not self._state.adding and self.is_rejected:
-            station_id = self.station.station_id if hasattr(self.station, 'station_id') else self.station_id
-            
-            WaterLevelObservation.objects.filter(
-                station_id_id=station_id,
-                observation_date=self.observation_date
-            ).update(
-                gauge_reader_water_level=None
-            )
+                observation.water_level = self.water_level
+                observation.source = 'gauge'
+                observation.save(update_fields=['water_level', 'source'])
 
     def __str__(self):
         station_val = getattr(self, 'station_id', None) or (self.station.station_id if self.station else '—')
