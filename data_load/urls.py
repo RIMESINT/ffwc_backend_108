@@ -29,6 +29,8 @@ router = DefaultRouter()
 router.register(r'user-auth', views.UserViewSet, basename='user')
 router.register(r'update-date',views.updateDateViewSet,basename='update')
 
+
+
 router.register(r'station-basins', views.BasinViewSet)
 
 router.register(r'units', views.UnitViewSet)
@@ -80,6 +82,10 @@ from .views import ScheduledTaskListView, ScheduledTaskCreateView,ScheduledTaskU
 from .views import JsonEntryListView,JsonEntryCreateView,JsonEntryRetrieveUpdateDestroyView
 
 urlpatterns = [
+    
+    
+    path('basin-wise-forecast/rapid/rapid-discharge-forecast/', views.get_rapid_discharge_forecast, name='rapid_discharge_forecast'),
+    
     path('', include(router.urls)),
 
 
@@ -322,6 +328,8 @@ urlpatterns = [
     path('basin-wise-forecast/parshuram/latest/', views.get_latest_parshuram_forecast, name='parshuram_latest'),
     
     path('basin-wise-forecast/dalia/latest/', views.get_latest_dalia_forecast, name='dalia_latest'),
+    
+
     
     path('proxy/', ProxyRequestView.as_view(), name='proxy'),
 
