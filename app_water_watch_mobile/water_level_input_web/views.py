@@ -86,7 +86,7 @@ class WaterLevelInputListAPIView(generics.ListAPIView):
 
 class WaterLevelInputApproveRejectAPIView(APIView):
     """
-    PATCH /v1/water_level_input_approve_reject/<pk>/
+    PUT /v1/water_level_input_approve_reject/<pk>/
     Approve or reject a water level input. Only one of is_approved or
     is_rejected can be True at a time.
     """

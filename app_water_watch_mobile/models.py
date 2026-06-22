@@ -140,15 +140,13 @@ class WaterLevelInputForMobileUser(models.Model):
                 station_id_id=station_id,
                 observation_date=self.observation_date,
                 defaults={
-                    'water_level': self.water_level,
-                    'source': 'gauge'
+                    'water_level': self.water_level
                 }
             )
 
             if not created:
                 observation.water_level = self.water_level
-                observation.source = 'gauge'
-                observation.save(update_fields=['water_level', 'source'])
+                observation.save(update_fields=['water_level'])
 
     def __str__(self):
         station_val = getattr(self, 'station_id', None) or (self.station.station_id if self.station else '—')
