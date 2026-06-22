@@ -140,14 +140,8 @@ class WaterLevelInputForMobileUser(models.Model):
             except WaterLevelInputForMobileUser.DoesNotExist:
                 old_intance = None
 
-        print("old_intance", old_intance, old_intance.is_approved, self.is_approved)
-
         if self.is_approved:
             station_id = self.station.station_id if hasattr(self.station, 'station_id') else self.station_id
-            
-            print("station_id", station_id)
-            print("observation_date", self.observation_date)
-            print("water_level", self.water_level)
 
             observation, created = WaterLevelObservation.objects.get_or_create(
                 station_id_id=station_id,
@@ -157,9 +151,6 @@ class WaterLevelInputForMobileUser(models.Model):
                     'gauge_reader_water_level': self.water_level
                 }
             )
-
-            print("observation", observation)
-            print("created", created)
             
             if not created:
                 observation.gauge_reader_water_level = self.water_level

@@ -1,15 +1,17 @@
 # views.py
-from rest_framework import generics
+from rest_framework import generics, status
+from rest_framework.views import APIView
+from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
+from django.shortcuts import get_object_or_404
 
 from app_water_watch_mobile.models import (
     WaterLevelInputForMobileUser
 )
 from app_water_watch_mobile.water_level_input_web.serializers import (
     WaterLevelInputForMobileUserSerializer,
-    WaterLevelInputApproveRejectSerializer
 )
 
 from ffwc_django_project.project_constant import PAGINATION_CONSTANT
@@ -38,7 +40,16 @@ class WaterLevelInputListAPIView(generics.ListAPIView):
         created_by = self.request.query_params.get('created_by', None)
         is_approved = self.request.query_params.get('is_approved', None)
         is_rejected = self.request.query_params.get('is_rejected', None)
-        
+        status = self.request.query_params.get('status', None)
+
+        if status is not None:
+            if status.lower() in ['approved']:
+                queryset = queryset.filter(is_approved=True, is_rejected=False)
+            elif status.lower() in ['rejected']:
+                queryset = queryset.filter(is_rejected=True, is_approved=False)
+            elif status.lower() in ['pending']:
+                queryset = queryset.filter(is_approved=False, is_rejected=False)
+
         if station_id:
             queryset = queryset.filter(station__id=station_id)
         
@@ -71,26 +82,49 @@ class WaterLevelInputListAPIView(generics.ListAPIView):
         
         return queryset.order_by('-observation_date')
 
-class WaterLevelInputApproveRejectAPIView(generics.UpdateAPIView):
+
+
+class WaterLevelInputApproveRejectAPIView(APIView):
     """
     PATCH /v1/water_level_input_approve_reject/<pk>/
-    Approve or reject a water level input. Only one of is_approved or 
+    Approve or reject a water level input. Only one of is_approved or
     is_rejected can be True at a time.
     """
     permission_classes = [IsAuthenticated]
-    serializer_class = WaterLevelInputApproveRejectSerializer
-    queryset = WaterLevelInputForMobileUser.objects.all()
-    http_method_names = ['patch']  # Only PATCH allowed — partial update
 
-    def perform_update(self, serializer):
-        is_approved = serializer.validated_data.get('is_approved', False)
-        is_rejected = serializer.validated_data.get('is_rejected', False)
+    def put(self, request, pk, *args, **kwargs):
+        obj = get_object_or_404(WaterLevelInputForMobileUser, pk=pk)
 
-        # Enforce mutual exclusivity — one DB write only
+        is_approved = request.data.get('is_approved', False)
+        is_rejected = request.data.get('is_rejected', False)
+
+        if is_approved and is_rejected:
+            return Response(
+                {'detail': 'Approve and reject cannot both be True.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
         if is_approved:
-            serializer.save(is_approved=True, is_rejected=False)
+            obj.is_approved = True
+            obj.is_rejected = False
         elif is_rejected:
-            serializer.save(is_approved=False, is_rejected=True)
+            obj.is_approved = False
+            obj.is_rejected = True
         else:
-            serializer.save()
+            return Response(
+                {'detail': 'Either is_approved or is_rejected must be True.'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        obj.save(update_fields=['is_approved', 'is_rejected'])
+
+        return Response(
+            {
+                'id': obj.pk,
+                'is_approved': obj.is_approved,
+                'is_rejected': obj.is_rejected,
+                'detail': 'Status updated successfully.'
+            },
+            status=status.HTTP_200_OK
+        )
     
