@@ -6,6 +6,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.pagination import PageNumberPagination
 from django_filters.rest_framework import DjangoFilterBackend
 from django.shortcuts import get_object_or_404
+from django.db.models import Q
+from django.db.models.functions import Lower
 
 from app_water_watch_mobile.models import (
     WaterLevelInputForMobileUser
@@ -36,11 +38,12 @@ class WaterLevelInputListAPIView(generics.ListAPIView):
         queryset = WaterLevelInputForMobileUser.objects.all()
         
         station_id = self.request.query_params.get('station_id', None)
-        is_acepted = self.request.query_params.get('is_acepted', None)
         created_by = self.request.query_params.get('created_by', None)
         is_approved = self.request.query_params.get('is_approved', None)
         is_rejected = self.request.query_params.get('is_rejected', None)
+        is_pending = self.request.query_params.get('is_pending', None)
         status = self.request.query_params.get('status', None)
+        search = self.request.query_params.get('search', None)
 
         if status is not None:
             if status.lower() in ['approved']:
@@ -50,19 +53,29 @@ class WaterLevelInputListAPIView(generics.ListAPIView):
             elif status.lower() in ['pending']:
                 queryset = queryset.filter(is_approved=False, is_rejected=False)
 
-        if station_id:
-            queryset = queryset.filter(station__id=station_id)
+        if station_id is not None:
+            queryset = queryset.filter(station_id=station_id)
         
-        if is_acepted is not None:
-            if is_acepted.lower() in ['true', '1', 'yes', 'approved']:
-                queryset = queryset.filter(is_acepted=True)
-            elif is_acepted.lower() in ['false', '0', 'no', 'rejected']:
-                queryset = queryset.filter(is_acepted=False)
+        if is_pending is not None:
+            if is_pending.lower() in ['true', '1', 'yes', 'approved']:
+                queryset = queryset.filter(is_approved=False, is_rejected = False)
             else:
                 queryset = queryset.filter(is_acepted=None)
         
         if created_by:
             queryset = queryset.filter(created_by__id=created_by)
+
+        if search:
+            search = search.strip().lower()
+            queryset = queryset.annotate(
+                cb_phone=Lower('created_by__mobile_number'),
+                cb_first=Lower('created_by__first_name'),
+                cb_last=Lower('created_by__last_name'),
+            ).filter(
+                Q(cb_phone__contains=search)
+                | Q(cb_first__contains=search)
+                | Q(cb_last__contains=search)
+            )
         
         if is_approved is not None:
             if is_approved.lower() in ['true', '1', 'yes', 'approved']:
