@@ -70,7 +70,7 @@
 30 09,10,11,12 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_rainfall_distribution_map_v2.sh
 
 # Flood Alerts (Sajib)
-30 09,10,11,12,15,16 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_flood_alerts.sh
+# 30 09,10,11,12,15,16 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_flood_alerts.sh
 
 # Flood Summary (Sajib)
 30 09,10,11,12,15,16 * * * /home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_flood_summary.sh
@@ -191,7 +191,7 @@
 17  14 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_bmdwrf_pre_monsoon_basin_wise_flash_flood
 
 # ECMWF Pre-Monsoon
-15 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_0_2_pre_monsoon_basin_wise_flash_flood
+15 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_0_2_monsoon_basin_wise_flash_flood
 20 16 * * * /home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py generate_ecmwf_0_2_pre_monsoon_basin_wise_flash_flood
 
 # --- ECMWF Ensemble & Probabilistic Flash Flood ---

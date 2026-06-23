@@ -27,7 +27,7 @@ DISTRICT_MAX_ALLOWED_STATUS = {
 }
 
 class Command(BaseCommand):
-    help = 'Generates alerts: Day 0 uses observed (with last update date fallback), Days 1-6 use forecast.'
+    help = 'Generates alerts: Day 0 uses observed (all stations), Days 1-6 use forecast (five_days_forecast=1 only).'
 
     def add_arguments(self, parser):
         parser.add_argument('date', type=str, nargs='?', help='YYYY-MM-DD')
@@ -75,7 +75,8 @@ class Command(BaseCommand):
                 'district_name': norm_name,
                 'display_name': station.district.strip().title(),
                 'lat': station.latitude,
-                'lon': station.longitude
+                'lon': station.longitude,
+                'five_days_forecast': getattr(station, 'five_days_forecast', 0)  # Captured to filter inside loop
             }
         
         self.stdout.write(self.style.SUCCESS(f"Successfully mapped {len(station_meta_map)} alert-ready stations."))
@@ -137,6 +138,10 @@ class Command(BaseCommand):
             self.stdout.write(self.style.MIGRATE_HEADING(f"\n--- TRACING DATA FOR {target_date} ({mode_label}) ---"))
 
             for sid, meta in station_meta_map.items():
+                # CRITICAL CHANGE: Only apply five_days_forecast filter for future days (Forecast Mode)
+                if not use_observed and meta['five_days_forecast'] != 1:
+                    continue
+
                 norm_dist = meta['district_name']
                 district_display_names[norm_dist] = meta['display_name']
 
@@ -201,3 +206,5 @@ class Command(BaseCommand):
                             created_count += 1
                 
                 self.stdout.write(self.style.SUCCESS(f"Successfully processed & saved {created_count} alerts for {target_date}."))
+
+        self.stdout.write(self.style.SUCCESS(f"\nAll 7 days have been successfully populated into the system context."))
