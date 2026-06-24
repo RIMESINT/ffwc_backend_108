@@ -4,14 +4,45 @@
 {% block extrastyle %}
 {{ block.super }}
 <style>
-    /* 1. HIDE DEFAULT DJANGO ADMIN SIDEBAR & EXTEND MAIN CANVAS FULL WIDTH */
-    #nav-sidebar { display: none !important; }
-    .main { width: 100% !important; flex-grow: 1 !important; display: block !important; }
-    #content { width: 100% !important; padding: 20px !important; box-sizing: border-box; }
+    /* 1. COMPLETELY HIDE SIDEBAR & THE '>>' TOGGLE ICON */
+    #nav-sidebar, #toggle-nav-sidebar { 
+        display: none !important; 
+        width: 0 !important; 
+        visibility: hidden !important; 
+        pointer-events: none !important; 
+    }
     
-    /* 2. LAYOUT DESIGN UI COMPONENTS */
-    .cron-panel-wrapper { max-width: 100%; font-family: "Roboto", "Lucida Grande", Verdana, sans-serif; }
-    .section-block-card { background: var(--body-bg, #fff); border: 1px solid var(--border-color, #e0e0e0); border-radius: 6px; margin-bottom: 20px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); overflow: hidden; }
+    /* 2. AGGRESSIVE FULL-SCREEN OVERRIDES FOR DJANGO CORE CONTAINERS */
+    html, body { width: 100% !important; margin: 0 !important; padding: 0 !important; overflow-x: hidden !important; }
+    #container { width: 100% !important; min-width: 100% !important; }
+    
+    /* Kill Django's flexbox layout for the main body to allow standard block expansion */
+    #main, .main { display: block !important; width: 100% !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
+    
+    /* Override Django's default 1200px max-width on the content area */
+    #content { 
+        width: 100% !important; 
+        max-width: 100% !important; 
+        margin: 0 !important; 
+        padding: 20px 30px !important; 
+        box-sizing: border-box !important; 
+    }
+    #content-main { width: 100% !important; max-width: 100% !important; }
+    
+    /* 3. FULL WIDTH SCRIPT CARD DESIGN */
+    .cron-panel-wrapper { width: 100% !important; box-sizing: border-box; font-family: "Roboto", "Lucida Grande", Verdana, sans-serif; }
+    
+    .section-block-card { 
+        width: 100% !important; 
+        display: block; 
+        background: var(--body-bg, #fff); 
+        border: 1px solid var(--border-color, #e0e0e0); 
+        border-radius: 6px; 
+        margin-bottom: 20px; 
+        box-shadow: 0 2px 5px rgba(0,0,0,0.05); 
+        overflow: hidden; 
+        box-sizing: border-box;
+    }
     
     /* INTERACTIVE CLICKABLE HEADER */
     .section-block-header { background: var(--primary, #79aec8); color: white; padding: 14px 20px; cursor: pointer; user-select: none; position: relative; transition: background-color 0.15s ease; }
@@ -24,22 +55,22 @@
     .section-block-card.expanded .toggle-chevron { transform: translateY(-50%) rotate(90deg); }
     
     /* HIDDEN BY DEFAULT FOR CLEAN INITIAL STATE */
-    .section-block-body { display: none; }
+    .section-block-body { display: none; width: 100% !important; }
     
-    .script-container-box { border-bottom: 1px solid var(--border-color, #eaeaea); }
+    .script-container-box { border-bottom: 1px solid var(--border-color, #eaeaea); width: 100% !important; box-sizing: border-box; }
     .script-container-box:last-child { border-bottom: none; }
     
-    .script-item-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: transparent; }
+    .script-item-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: transparent; width: 100% !important; box-sizing: border-box; }
     .script-item-row:hover { background-color: var(--darkened-bg, #fbfbfb); }
     .script-name-txt { font-size: 14px; font-weight: 600; color: var(--body-fg, #333); margin-bottom: 3px; }
-    .trigger-btn { background: var(--button-bg, #417690); border: none; color: white; padding: 6px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.15s ease; font-size: 12px; }
+    .trigger-btn { background: var(--button-bg, #417690); border: none; color: white; padding: 6px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.15s ease; font-size: 12px; white-space: nowrap; }
     .trigger-btn:hover { background: var(--button-hover-bg, #2b5063); }
     
-    /* 3. INLINE RUNTIME WORKSPACE TERMINAL */
-    .inline-runtime-terminal { display: none; background: #141414; color: #22ff66; font-family: "Courier New", Courier, monospace; padding: 15px 20px; border-top: 1px dashed #333; border-bottom: 1px solid #111; box-shadow: inset 0 4px 10px rgba(0,0,0,0.4); }
+    /* 4. INLINE RUNTIME WORKSPACE TERMINAL */
+    .inline-runtime-terminal { display: none; width: 100% !important; box-sizing: border-box; background: #141414; color: #22ff66; font-family: "Courier New", Courier, monospace; padding: 15px 20px; border-top: 1px dashed #333; border-bottom: 1px solid #111; box-shadow: inset 0 4px 10px rgba(0,0,0,0.4); }
     .progress-bar-track { background: #333; width: 100%; height: 16px; border-radius: 4px; overflow: hidden; margin: 8px 0; border: 1px solid #444; }
     .progress-bar-fill { background: #00ff66; width: 0%; height: 100%; text-align: center; color: #000; font-size: 10px; font-weight: 900; line-height: 16px; transition: width 0.2s ease; }
-    .console-pane-stream { background: #070707; padding: 10px; border-radius: 4px; height: 160px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; color: #eee; margin-top: 4px; border: 1px solid #222; }
+    .console-pane-stream { background: #070707; padding: 10px; border-radius: 4px; height: 160px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; color: #eee; margin-top: 4px; border: 1px solid #222; width: 100% !important; box-sizing: border-box; }
 </style>
 {% endblock %}
 
@@ -64,13 +95,13 @@
             <div class="script-container-box">
                 
                 <div class="script-item-row">
-                    <div class="script-info">
+                    <div class="script-info" style="flex-grow: 1;">
                         <div class="script-name-txt">{{ task.name }}</div>
-                        <code style="font-size: 11px; color: #666; font-family: monospace; background: var(--darkened-bg, #f5f5f5); padding: 1px 4px; border-radius: 3px;">
-                            Binary Reference: {{ task.args|join:" " }}
+                        <code style="font-size: 11px; color: #666; font-family: monospace; background: var(--darkened-bg, #f5f5f5); padding: 2px 6px; border-radius: 3px; display: inline-block; word-break: break-all;">
+                            {{ task.args|join:" " }}
                         </code>
                     </div>
-                    <div class="task-action">
+                    <div class="task-action" style="margin-left: 20px;">
                         <button type="button" class="trigger-btn" id="btn-{{ section_key }}-{{ task_key }}" onclick="launchPipelineJob('{{ section_key }}', '{{ task_key }}', '{{ task.name }}')">
                             Run Script
                         </button>
@@ -184,7 +215,6 @@ function commenceWorkerTracking(taskId, sectionKey, taskKey) {
             fillNode.innerText = `${data.percent}%`;
 
             if (data.stdout) stdoutNode.innerText = data.stdout;
-            // Warnings are already stripped by backend python view layers cleanly here
             e_node.innerText = data.stderr ? data.stderr : "No diagnostic messages recorded.";
 
             if (data.state === 'SUCCESS' || data.state === 'FAILURE' || data.state === 'REVOKED') {
