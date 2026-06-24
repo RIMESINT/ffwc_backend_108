@@ -1,6 +1,8 @@
 from django.urls import path
 from app_water_watch_mobile.water_level_input.views import (
     WaterLevelStationForMobileUserViewSet,
+    WaterLevelStationAssignmentCountAPIView,
+    WaterLevelStationStatusListAPIView,
     BulkWaterLevelCreateAPIView,
     Last7DaysWaterLevelAPIView,
     WaterLevelUpdateAPIView,
@@ -64,6 +66,18 @@ urlpatterns = [
         'v1/water_level_inputs_list_with_filter/',
         WaterLevelInputListAPIView.as_view(), 
         name='water_level_inputs_list_with_filter'
+    ),
+
+    path(
+        'v1/waterlevel/station-assignment-count/',
+        WaterLevelStationAssignmentCountAPIView.as_view(),
+        name='waterlevel-station-assignment-count'
+    ),
+
+    path(
+        'v1/waterlevel/station-status/<str:status_type>/',
+        WaterLevelStationStatusListAPIView.as_view(),
+        name='waterlevel-station-status'
     ),
 
     path('v1/water_level_input_approve_reject/<int:pk>/',

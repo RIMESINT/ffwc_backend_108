@@ -5,8 +5,10 @@ from rest_framework.response import Response
 from rest_framework import status, permissions
 from rest_framework import generics, permissions 
 from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
 
 from django.db import transaction
+from django.db.models import OuterRef, Subquery
 from django.utils.timezone import now
 from django.utils import timezone
 from django.shortcuts import get_object_or_404
@@ -21,6 +23,10 @@ from app_water_watch_mobile.water_level_input.serializers import (
 from app_water_watch_mobile.models import (
     WaterLevelInputForMobileUser,
     WaterWatchWaterLevelStationForMobileUser,
+)
+
+from data_load.models import (
+    Station,
 )
 
 from app_user_mobile.authentication import (
@@ -79,6 +85,142 @@ class WaterLevelStationForMobileUserViewSet(generics.ListAPIView):
 
         return qs.select_related("water_level_station", "mobile_user").order_by("-created_at")
 
+
+
+class WaterLevelStationAssignmentCountAPIView(APIView):
+    """
+        GET endpoint returning station assignment counts for the authenticated mobile user.
+        - assigned_count: number of distinct stations actively assigned to the user.
+        - not_assigned_count: stations in the system not actively assigned to the user.
+        - total_stations: total number of water level stations.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, *args, **kwargs):
+        total_stations = Station.objects.filter(status=True).count()
+
+        assigned_count = (
+            WaterWatchWaterLevelStationForMobileUser.objects.filter(
+                is_active=True,
+                water_level_station__status=True,
+            )
+            .values("water_level_station")
+            .distinct()
+            .count()
+        )
+
+        not_assigned_count = total_stations - assigned_count
+
+        # Distinct stations that sent data in the last 3 hours (up to date).
+        three_hours_ago = now() - timedelta(hours=3)
+        up_to_date = (
+            WaterLevelInputForMobileUser.objects.filter(
+                observation_date__gte=three_hours_ago
+            )
+            .values("station")
+            .distinct()
+            .count()
+        )
+
+        # Stations that have not sent data in the last 3 hours (delayed).
+        delayed = total_stations - up_to_date
+
+        return Response(
+            {
+                "total_stations": total_stations,
+                "assigned_count": assigned_count,
+                "not_assigned_count": not_assigned_count,
+                "up_to_date": up_to_date,
+                "delayed": delayed,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class WaterLevelStationStatusListAPIView(APIView):
+    """
+        GET /waterlevel/station-status/<status_type>/
+        status_type is a URL path param: either 'up_to_date' or 'delayed'.
+
+        Lists assigned stations for the chosen status:
+        - up_to_date: stations whose latest observation was recorded within the last 3 hours.
+        - delayed:    stations with no observation in the last 3 hours.
+
+        Each row returns the assigned mobile user (name + phone), the station name,
+        the station web id, and when the last observation was recorded / inserted.
+    """
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, status_type, *args, **kwargs):
+        if status_type not in ("up_to_date", "delayed"):
+            return Response(
+                {"detail": "Invalid status type. Use 'up_to_date' or 'delayed'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        three_hours_ago = now() - timedelta(hours=3)
+
+        # Active assignments to active stations, with user + station preloaded.
+        mappings = (
+            WaterWatchWaterLevelStationForMobileUser.objects.filter(
+                is_active=True,
+                water_level_station__status=True,
+            )
+            .select_related("water_level_station", "mobile_user")
+            .order_by("water_level_station__name")
+        )
+
+        # Latest observation per station (single pass, avoids N+1 queries).
+        station_ids = [m.water_level_station_id for m in mappings]
+        latest_by_station = {}
+        observations = (
+            WaterLevelInputForMobileUser.objects.filter(station_id__in=station_ids)
+            .select_related("created_by")
+            .order_by("station_id", "-observation_date")
+        )
+        for obs in observations:
+            if obs.station_id not in latest_by_station:
+                latest_by_station[obs.station_id] = obs
+
+        results = []
+        for m in mappings:
+            station = m.water_level_station
+            user = m.mobile_user
+            latest = latest_by_station.get(m.water_level_station_id)
+            added_by = latest.created_by if latest else None
+
+            is_up_to_date = bool(
+                latest
+                and latest.observation_date
+                and latest.observation_date >= three_hours_ago
+            )
+
+            if status_type == "up_to_date" and not is_up_to_date:
+                continue
+            if status_type == "delayed" and is_up_to_date:
+                continue
+
+            results.append({
+                "station_id": station.station_id,
+                "station_name": station.name,
+                "mobile_user_id": user.id,
+                "mobile_user_name": user.full_name,
+                "mobile_number": user.mobile_number,
+                
+                "last_observation_date": latest.observation_date if latest else None,
+                "last_observation_inserted_at": latest.created_at if latest else None,
+                "last_observation_added_by_id": added_by.id if added_by else None,
+                "last_observation_added_by_name": added_by.full_name if added_by else None,
+            })
+
+        return Response(
+            {
+                "status_type": status_type,
+                "count": len(results),
+                "results": results,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
 class BulkWaterLevelCreateAPIView(APIView):
