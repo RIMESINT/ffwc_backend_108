@@ -5456,3 +5456,36 @@ class ProxyRequestView(View):
 #             return JsonResponse({'error': 'Upstream API (BWDB) timed out'}, status=504)
 #         except requests.exceptions.RequestException as e:
 #             return JsonResponse({'error': f'Proxy Connection Error: {str(e)}'}, status=502)
+
+
+
+
+
+def get_rapid_discharge_forecast(request):
+    """
+    Generic endpoint to fetch latest basin forecasts using query parameters.
+    Example: /data_load/basin-wise-forecast/rapid/rapid-discharge-forecast/?station_id=101
+    """
+    station_id = request.GET.get('station_id')
+    
+    if not station_id:
+        return JsonResponse({"code": "error", "message": "Missing 'station_id' parameter."}, status=400)
+    
+    # Map incoming station IDs to their generated local JSON files
+    station_mapping = {
+        "66": "latest_brahmaputra_forecast.json",
+        "291": "latest_dalia_forecast.json",
+        "43": "latest_ganges_forecast.json",  # Added Ganges station ID mapping
+    }
+    
+    json_filename = station_mapping.get(str(station_id))
+    if not json_filename:
+        return JsonResponse({"code": "error", "message": f"Station ID '{station_id}' is not supported."}, status=404)
+        
+    json_path = os.path.join(settings.BASE_DIR, 'assets', 'flood-monitor-basin-forecast', json_filename)
+    
+    if os.path.exists(json_path):
+        with open(json_path, 'r') as f:
+            return JsonResponse(json.load(f))
+            
+    return JsonResponse({"code": "error", "message": f"Forecast data for station {station_id} is temporarily unavailable."}, status=404)
