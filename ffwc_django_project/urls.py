@@ -15,6 +15,12 @@ admin.sites.AdminSite.site_header = 'Administrator (FFWC)'
 admin.sites.AdminSite.site_title = 'Administrator Panel (FFWC)'
 admin.sites.AdminSite.index_title = ''
 
+from app_crontab.views import (
+    crontab_dashboard_view,
+    crontab_trigger_json_view,
+    crontab_task_status_view
+)
+
 
 urlpatterns = [
 
@@ -23,6 +29,13 @@ urlpatterns = [
     path('fileuploads/', include('fileuploads.urls')),
     path('data_load/', include('data_load.urls')),
     path('indian-stations/', include('indian_stations.urls')),
+    
+    
+    path('admin/crontab-operations/', crontab_dashboard_view, name='crontab_dashboard'),
+    path('admin/crontab-operations/trigger/', crontab_trigger_json_view, name='crontab_trigger_json'),
+    path('admin/crontab-operations/status/<str:task_id>/', crontab_task_status_view, name='crontab_task_status'),
+    
+    
     
     path('admin/', admin.site.urls),
     path('api/token/', MyTokenObtainPairView.as_view(), name='token_obtain_pair'),
