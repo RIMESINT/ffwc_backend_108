@@ -43,8 +43,8 @@ class Command(BaseCommand):
         
         # Exact threshold rules
         if wl > (dl + 1.0): return "severe"
-        elif wl >= dl: return "flood"
-        elif wl >= (dl - 0.5): return "warning"
+        elif wl > dl: return "flood"
+        elif wl > (dl - 0.5): return "warning"
         else: return "normal"
 
     def handle(self, *args, **options):
