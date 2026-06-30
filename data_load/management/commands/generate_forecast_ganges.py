@@ -159,7 +159,7 @@ class Command(BaseCommand):
                 "metadata": {
                     "station_id": "101", "basin_name": "Ganges River (Hardinge Bridge)",
                     "forecast_date": formatted_date, "run_datetime": run_datetime,
-                    "dc_unit": "m³/s", "dl": "43000", "pb_unit": "%", "forecast_type": "experimental"
+                    "dc_unit": "m³/s", "dl": "73240", "pb_unit": "%", "forecast_type": "experimental"
                 },
                 "data": {
                     "date": dates_list, "5%": p05, "25%": p25, "50%": p50, "75%": p75, "95%": p95

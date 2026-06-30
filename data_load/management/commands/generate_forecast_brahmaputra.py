@@ -160,7 +160,7 @@ class Command(BaseCommand):
                 "metadata": {
                     "station_id": "66", "basin_name": "Brahmaputra River (Bahadurabad)",
                     "forecast_date": formatted_date, "run_datetime": run_datetime,
-                    "dc_unit": "m³/s", "dl": "40000", "pb_unit": "%", "forecast_type": "experimental"
+                    "dc_unit": "m³/s", "dl": "55000", "pb_unit": "%", "forecast_type": "experimental"
                 },
                 "data": {
                     "date": dates_list, "5%": p05, "25%": p25, "50%": p50, "75%": p75, "95%": p95
