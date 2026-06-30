@@ -45,13 +45,28 @@ class Command(BaseCommand):
     help = 'Generate Monsoon Basin Wise Flashflood for BMD-WRF'
 
     def add_arguments(self, parser):
+        # Support positional arguments for old shell script fallback traces
         parser.add_argument('date', nargs='?', type=str, help='Initialization date (YYYY-MM-DD)')
+        # Explicit option parameter support for Django Admin UI layout hooks
+        parser.add_argument('--date', type=str, help='Explicit argument flag injected by dashboard panel')
 
     def handle(self, *args, **kwargs):
-        date_input = kwargs.get('date') or datetime.now().strftime('%Y-%m-%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('date') # Argparse maps positional to the 'date' target property if no double dash exists
+
+        # Resolve whichever parameter parameter configuration has tracking data
+        raw_date = ui_date if ui_date else positional_date
+        
+        # Fallback to current system timestamp if parameter fields are completely blank
+        date_input = raw_date or datetime.now().strftime('%Y-%m-%d')
+        
+        # Standardize formatting to YYYY-MM-DD layout safely
         if "-" not in date_input:
-            try: date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
-            except: pass
+            try: 
+                date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+            except: 
+                pass
+                
         self.stdout.write(self.style.SUCCESS(f"🚀 Starting BMD-WRF Monsoon Run: {date_input}"))
         self.main(date_input)
 

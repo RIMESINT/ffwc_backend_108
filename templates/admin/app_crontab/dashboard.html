@@ -4,33 +4,33 @@
 {% block extrastyle %}
 {{ block.super }}
 <style>
-    /* 1. COMPLETELY HIDE SIDEBAR & THE '>>' TOGGLE ICON */
-    #nav-sidebar, #toggle-nav-sidebar { 
+    /* 1. HIDE SIDEBAR & DJANGO'S NATIVE TOGGLE ICON */
+    #nav-sidebar, #toggle-nav-sidebar, .toggle-nav-sidebar { 
         display: none !important; 
-        width: 0 !important; 
-        visibility: hidden !important; 
-        pointer-events: none !important; 
     }
     
-    /* 2. AGGRESSIVE FULL-SCREEN OVERRIDES FOR DJANGO CORE CONTAINERS */
-    html, body { width: 100% !important; margin: 0 !important; padding: 0 !important; overflow-x: hidden !important; }
-    #container { width: 100% !important; min-width: 100% !important; }
-    
-    /* Kill Django's flexbox layout for the main body to allow standard block expansion */
-    #main, .main { display: block !important; width: 100% !important; max-width: 100% !important; margin: 0 !important; padding: 0 !important; }
-    
-    /* Override Django's default 1200px max-width on the content area */
+    /* 2. FORCE 98% VIEWPORT WIDTH */
+    /* This is the exact rollback technique that successfully bypassed Django's limits */
     #content { 
-        width: 100% !important; 
-        max-width: 100% !important; 
-        margin: 0 !important; 
-        padding: 20px 30px !important; 
+        width: 98vw !important; 
+        max-width: 98vw !important; 
+        margin: 0 auto !important; /* Centers it on the screen */
+        padding: 20px 0 !important; 
         box-sizing: border-box !important; 
     }
-    #content-main { width: 100% !important; max-width: 100% !important; }
     
-    /* 3. FULL WIDTH SCRIPT CARD DESIGN */
-    .cron-panel-wrapper { width: 100% !important; box-sizing: border-box; font-family: "Roboto", "Lucida Grande", Verdana, sans-serif; }
+    #container, #main, #content-main {
+        width: 100% !important;
+        max-width: 100% !important;
+        display: block !important;
+    }
+    
+    /* 3. SCRIPT CARD DESIGN */
+    .cron-panel-wrapper { 
+        width: 100% !important; 
+        box-sizing: border-box; 
+        font-family: "Roboto", "Lucida Grande", Verdana, sans-serif; 
+    }
     
     .section-block-card { 
         width: 100% !important; 
@@ -40,54 +40,80 @@
         border-radius: 6px; 
         margin-bottom: 20px; 
         box-shadow: 0 2px 5px rgba(0,0,0,0.05); 
-        overflow: hidden; 
         box-sizing: border-box;
     }
     
-    /* INTERACTIVE CLICKABLE HEADER */
-    .section-block-header { background: var(--primary, #79aec8); color: white; padding: 14px 20px; cursor: pointer; user-select: none; position: relative; transition: background-color 0.15s ease; }
-    .section-block-header:hover { background-color: var(--button-hover-bg, #2b5063); }
+    /* INTERACTIVE HEADER */
+    .section-block-header { 
+        background: var(--primary, #79aec8); 
+        color: white; 
+        padding: 14px 20px; 
+        cursor: pointer; 
+        user-select: none; 
+        position: relative; 
+        transition: background-color 0.15s ease; 
+    }
+    .section-block-header:hover { background: var(--button-hover-bg, #2b5063); }
     .section-block-header h3 { margin: 0; color: #fff; font-size: 15px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; padding-right: 30px; }
     .section-block-header p { margin: 4px 0 0 0; color: #e2f0f7; font-size: 12px; font-style: italic; padding-right: 30px; }
     
-    /* EXPAND / COLLAPSE INDICATOR CHEVRON */
-    .toggle-chevron { position: absolute; top: 50%; right: 20px; transform: translateY(-50%); font-size: 16px; color: #fff; font-weight: bold; transition: transform 0.2s ease; }
-    .section-block-card.expanded .toggle-chevron { transform: translateY(-50%) rotate(90deg); }
+    /* ACCORDION CHEVRON & BODY (Hidden by default) */
+    .section-block-body { display: none; width: 100%; }
+    .toggle-chevron { position: absolute; top: 50%; right: 20px; transform: translateY(-50%); font-size: 16px; color: #fff; font-weight: bold; }
     
-    /* HIDDEN BY DEFAULT FOR CLEAN INITIAL STATE */
-    .section-block-body { display: none; width: 100% !important; }
-    
-    .script-container-box { border-bottom: 1px solid var(--border-color, #eaeaea); width: 100% !important; box-sizing: border-box; }
+    .script-container-box { border-bottom: 1px solid var(--border-color, #eaeaea); width: 100%; box-sizing: border-box; }
     .script-container-box:last-child { border-bottom: none; }
     
-    .script-item-row { display: flex; align-items: center; justify-content: space-between; padding: 14px 20px; background: transparent; width: 100% !important; box-sizing: border-box; }
+    /* ROW LAYOUT */
+    .script-item-row { 
+        display: flex !important; 
+        justify-content: space-between !important; 
+        align-items: center !important; 
+        padding: 14px 20px !important; 
+        background: transparent; 
+        width: 100% !important; 
+        box-sizing: border-box !important; 
+    }
     .script-item-row:hover { background-color: var(--darkened-bg, #fbfbfb); }
-    .script-name-txt { font-size: 14px; font-weight: 600; color: var(--body-fg, #333); margin-bottom: 3px; }
-    .trigger-btn { background: var(--button-bg, #417690); border: none; color: white; padding: 6px 16px; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.15s ease; font-size: 12px; white-space: nowrap; }
+    
+    .script-info {
+        flex-grow: 1 !important; 
+        padding-right: 20px; 
+    }
+    .script-name-txt { font-size: 14px; font-weight: 600; color: var(--body-fg, #333); margin-bottom: 4px; }
+    
+    /* DATE PICKER & TRIGGER BUTTON */
+    .task-action { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+    .task-date-input { background: var(--body-bg, #fff); border: 1px solid var(--border-color, #ccc); color: var(--body-fg, #333); padding: 5px 10px; border-radius: 4px; font-family: "Courier New", monospace; font-size: 12px; cursor: pointer; outline: none; }
+    .task-date-input:focus { border-color: var(--primary, #79aec8); }
+    .trigger-btn { background: var(--button-bg, #417690); border: none; color: white; padding: 7px 18px; border-radius: 4px; font-weight: bold; cursor: pointer; transition: background 0.15s ease; font-size: 13px; white-space: nowrap; }
     .trigger-btn:hover { background: var(--button-hover-bg, #2b5063); }
     
-    /* 4. INLINE RUNTIME WORKSPACE TERMINAL */
-    .inline-runtime-terminal { display: none; width: 100% !important; box-sizing: border-box; background: #141414; color: #22ff66; font-family: "Courier New", Courier, monospace; padding: 15px 20px; border-top: 1px dashed #333; border-bottom: 1px solid #111; box-shadow: inset 0 4px 10px rgba(0,0,0,0.4); }
+    /* 4. INLINE RUNTIME TERMINAL */
+    .inline-runtime-terminal { display: none; width: 100%; box-sizing: border-box; background: #141414; color: #22ff66; font-family: "Courier New", Courier, monospace; padding: 15px 20px; border-top: 1px dashed #333; border-bottom: 1px solid #111; box-shadow: inset 0 4px 10px rgba(0,0,0,0.4); }
     .progress-bar-track { background: #333; width: 100%; height: 16px; border-radius: 4px; overflow: hidden; margin: 8px 0; border: 1px solid #444; }
     .progress-bar-fill { background: #00ff66; width: 0%; height: 100%; text-align: center; color: #000; font-size: 10px; font-weight: 900; line-height: 16px; transition: width 0.2s ease; }
-    .console-pane-stream { background: #070707; padding: 10px; border-radius: 4px; height: 160px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; color: #eee; margin-top: 4px; border: 1px solid #222; width: 100% !important; box-sizing: border-box; }
+    .console-pane-stream { background: #070707; padding: 12px; border-radius: 4px; min-height: 120px; max-height: 400px; overflow-y: auto; white-space: pre-wrap; font-size: 12px; color: #eee; margin-top: 4px; border: 1px solid #222; width: 100%; box-sizing: border-box; }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="cron-panel-wrapper">
-    <div class="help" style="margin-bottom: 20px;">
-        <h2>Operational Pipelines Production Controller Workspace</h2>
-        <p>Manually execute dataset ingestion models and spatial calculation commands directly from your active crontab profile mappings. Click on any section header below to expand its execution tree. Tasks deploy cleanly into background Celery workers to protect Gunicorn threads from timeout boundaries.</p>
+
+    <div class="help" style="margin-bottom: 20px; background: var(--darkened-bg, #e8f4f8); padding: 16px 20px; border-left: 5px solid var(--primary, #417690); border-radius: 4px;">
+        <h2 style="margin: 0 0 5px 0; color: var(--primary, #417690); font-weight: bold;">FFWC Operations Control Center</h2>
+        <p style="margin: 0; color: var(--body-fg, #333); font-size: 13.5px; line-height: 1.5;">
+            Execute background data ingestion, spatial forecasting models, and map generation scripts on demand. All processes deploy asynchronously to protect system stability. <strong>Click a section header below to expand its tasks.</strong>
+        </p>
     </div>
 
     {% for section_key, section in pipeline_registry.items %}
-    <div class="section-block-card" id="card-{{ section_key }}">
+    <div class="section-block-card">
         
-        <div class="section-block-header" onclick="toggleSectionGroup('{{ section_key }}')">
+        <div class="section-block-header js-accordion-trigger" data-target="body-{{ section_key }}">
             <h3>{{ section.title }}</h3>
             <p>{{ section.description }}</p>
-            <span class="toggle-chevron" id="chevron-{{ section_key }}">▶</span>
+            <span class="toggle-chevron">▶</span>
         </div>
         
         <div class="section-block-body" id="body-{{ section_key }}">
@@ -95,30 +121,34 @@
             <div class="script-container-box">
                 
                 <div class="script-item-row">
-                    <div class="script-info" style="flex-grow: 1;">
+                    <div class="script-info">
                         <div class="script-name-txt">{{ task.name }}</div>
-                        <code style="font-size: 11px; color: #666; font-family: monospace; background: var(--darkened-bg, #f5f5f5); padding: 2px 6px; border-radius: 3px; display: inline-block; word-break: break-all;">
+                        <code style="font-size: 11px; color: #666; font-family: monospace; background: var(--darkened-bg, #f5f5f5); padding: 3px 8px; border-radius: 3px; display: inline-block; word-break: break-all;">
                             {{ task.args|join:" " }}
                         </code>
                     </div>
-                    <div class="task-action" style="margin-left: 20px;">
-                        <button type="button" class="trigger-btn" id="btn-{{ section_key }}-{{ task_key }}" onclick="launchPipelineJob('{{ section_key }}', '{{ task_key }}', '{{ task.name }}')">
+                    
+                    <div class="task-action">
+                        <input type="date" id="date-{{ section_key }}-{{ task_key }}" class="task-date-input" title="Optional: Select target date">
+                        <button type="button" class="trigger-btn" onclick="launchPipelineJob('{{ section_key }}', '{{ task_key }}', '{{ task.name }}')">
                             Run Script
                         </button>
                     </div>
                 </div>
 
                 <div class="inline-runtime-terminal" id="terminal-{{ section_key }}-{{ task_key }}">
-                    <div style="font-weight: bold; margin-bottom: 4px;" id="status-{{ section_key }}-{{ task_key }}">Status Context: Awaiting initiation thread hook...</div>
+                    <div style="font-weight: bold; margin-bottom: 6px;" id="status-{{ section_key }}-{{ task_key }}">Status Context: Awaiting initiation thread hook...</div>
                     <div class="progress-bar-track">
                         <div class="progress-bar-fill" id="fill-{{ section_key }}-{{ task_key }}">0%</div>
                     </div>
                     
-                    <h4 style="color: #fff; margin: 10px 0 2px 0; font-size: 11px; text-transform: uppercase;">Standard Output Channel (STDOUT):</h4>
+                    <h4 style="color: #fff; margin: 12px 0 4px 0; font-size: 11px; text-transform: uppercase;">Standard Output Channel (STDOUT):</h4>
                     <div class="console-pane-stream" id="stdout-{{ section_key }}-{{ task_key }}">Awaiting data stream processing blocks...</div>
 
-                    <h4 style="color: #ff3333; margin: 10px 0 2px 0; font-size: 11px; text-transform: uppercase;">Standard Error Diagnostics (STDERR):</h4>
-                    <div class="console-pane-stream" id="stderr-{{ section_key }}-{{ task_key }}" style="color: #ff6666; height: 70px;">Clean runtime environment validated.</div>
+                    <div id="stderr-container-{{ section_key }}-{{ task_key }}" style="display: none;">
+                        <h4 style="color: #ff3333; margin: 12px 0 4px 0; font-size: 11px; text-transform: uppercase;">Standard Error Diagnostics (STDERR):</h4>
+                        <div class="console-pane-stream" id="stderr-{{ section_key }}-{{ task_key }}" style="color: #ff6666; min-height: 80px;"></div>
+                    </div>
                 </div>
 
             </div>
@@ -131,51 +161,70 @@
 <script>
 let telemetryTrackingInterval = null;
 
-// EXPAND / COLLAPSE INTERACTION CONTROLLER
-function toggleSectionGroup(sectionKey) {
-    const cardNode = document.getElementById(`card-${sectionKey}`);
-    const bodyNode = document.getElementById(`body-${sectionKey}`);
-    const chevronNode = document.getElementById(`chevron-${sectionKey}`);
+document.addEventListener("DOMContentLoaded", function() {
+    // PURE JS ACCORDION: Completely isolated from Django CSS classes to stop bounce-back
+    const headers = document.querySelectorAll('.js-accordion-trigger');
     
-    if (bodyNode.style.display === 'block') {
-        bodyNode.style.display = 'none';
-        cardNode.classList.remove('expanded');
-        chevronNode.innerText = '▶';
-    } else {
-        bodyNode.style.display = 'block';
-        cardNode.classList.add('expanded');
-        chevronNode.innerText = '▼';
-    }
-}
+    headers.forEach(header => {
+        header.addEventListener('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            
+            const targetId = this.getAttribute('data-target');
+            const bodyContainer = document.getElementById(targetId);
+            const chevron = this.querySelector('.toggle-chevron');
+            
+            // Directly manipulates the style instead of relying on a CSS class
+            if (bodyContainer.style.display === 'block') {
+                bodyContainer.style.display = 'none';
+                chevron.innerText = '▶';
+                chevron.style.transform = 'translateY(-50%) rotate(0deg)';
+            } else {
+                bodyContainer.style.display = 'block';
+                chevron.innerText = '▼';
+                chevron.style.transform = 'translateY(-50%) rotate(0deg)'; 
+            }
+        });
+    });
+});
 
 function launchPipelineJob(sectionKey, taskKey, name) {
-    if (!confirm(`Are you sure you want to run the model:\n"${name}"?`)) return;
+    const dateInput = document.getElementById(`date-${sectionKey}-${taskKey}`).value;
+    
+    let confirmMsg = `Are you sure you want to run the model:\n"${name}"?`;
+    if (dateInput) {
+        confirmMsg = `Are you sure you want to run the model:\n"${name}"\n\nTarget Date: ${dateInput}?`;
+    }
+    
+    if (!confirm(confirmMsg)) return;
 
-    // Close any other open inline terminals across all scripts
     document.querySelectorAll('.inline-runtime-terminal').forEach(el => el.style.display = 'none');
 
-    // Resolve structural target pointers for this specific inline console box layout
     const terminalNode = document.getElementById(`terminal-${sectionKey}-${taskKey}`);
     const statusNode = document.getElementById(`status-${sectionKey}-${taskKey}`);
     const fillNode = document.getElementById(`fill-${sectionKey}-${taskKey}`);
     const stdoutNode = document.getElementById(`stdout-${sectionKey}-${taskKey}`);
-    const e_node = document.getElementById(`stderr-${sectionKey}-${taskKey}`);
+    const errContainer = document.getElementById(`stderr-container-${sectionKey}-${taskKey}`);
+    const stderrNode = document.getElementById(`stderr-${sectionKey}-${taskKey}`);
 
-    // Initialize display layout states locally
     terminalNode.style.display = 'block';
+    errContainer.style.display = 'none'; 
     statusNode.innerText = "Status Context: Requesting pipeline space allocations inside worker queues...";
     fillNode.style.width = '0%';
     fillNode.innerText = '0%';
     stdoutNode.innerText = "Connecting process pipeline capture structures...";
-    e_node.innerText = "Filtered diagnostics verification checking active.";
+    stderrNode.innerText = "";
     
-    // Smooth scroll directly to the selected element's console frame area
-    terminalNode.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    terminalNode.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
     const postPayload = new FormData();
     postPayload.append('section_key', sectionKey);
     postPayload.append('task_key', taskKey);
     postPayload.append('csrfmiddlewaretoken', '{{ csrf_token }}');
+    
+    if (dateInput) {
+        postPayload.append('custom_date', dateInput);
+    }
 
     fetch('{% url "crontab_trigger_json" %}', {
         method: 'POST',
@@ -204,7 +253,8 @@ function commenceWorkerTracking(taskId, sectionKey, taskKey) {
     const statusNode = document.getElementById(`status-${sectionKey}-${taskKey}`);
     const fillNode = document.getElementById(`fill-${sectionKey}-${taskKey}`);
     const stdoutNode = document.getElementById(`stdout-${sectionKey}-${taskKey}`);
-    const e_node = document.getElementById(`stderr-${sectionKey}-${taskKey}`);
+    const errContainer = document.getElementById(`stderr-container-${sectionKey}-${taskKey}`);
+    const stderrNode = document.getElementById(`stderr-${sectionKey}-${taskKey}`);
 
     telemetryTrackingInterval = setInterval(() => {
         fetch(checkUrl)
@@ -215,7 +265,16 @@ function commenceWorkerTracking(taskId, sectionKey, taskKey) {
             fillNode.innerText = `${data.percent}%`;
 
             if (data.stdout) stdoutNode.innerText = data.stdout;
-            e_node.innerText = data.stderr ? data.stderr : "No diagnostic messages recorded.";
+            
+            if (data.stderr && data.stderr.trim() !== "" && !data.stderr.includes("No error diagnostics recorded.")) {
+                errContainer.style.display = 'block';
+                stderrNode.innerText = data.stderr;
+            } else {
+                errContainer.style.display = 'none';
+                stderrNode.innerText = "";
+            }
+
+            stdoutNode.scrollTop = stdoutNode.scrollHeight;
 
             if (data.state === 'SUCCESS' || data.state === 'FAILURE' || data.state === 'REVOKED') {
                 clearInterval(telemetryTrackingInterval);
@@ -230,7 +289,7 @@ function commenceWorkerTracking(taskId, sectionKey, taskKey) {
             clearInterval(telemetryTrackingInterval);
             console.error("Communications connection to background metrics table dropped: ", err);
         });
-    }, 1500); // Check status progress benchmarks every 1.5 seconds
+    }, 1500); 
 }
 </script>
 {% endblock %}

@@ -9,7 +9,7 @@ import geopandas as gpd
 from datetime import datetime, timedelta
 
 from xarray import SerializationWarning 
-from django.core.management import BaseCommand
+from django.core.management.base import BaseCommand
 from django.conf import settings
 
 # --- Model Import ---
@@ -45,15 +45,29 @@ class Command(BaseCommand):
     help = 'Generate Pre-Monsoon Flash Flood Forecast for BMD-WRF with level squeezing and spatial fix.'
 
     def add_arguments(self, parser):
-        parser.add_argument('date', nargs='?', type=str, help='Initialization date (YYYY-MM-DD)')
+        # Support positional parameter for old console script execution compatibility
+        parser.add_argument('fdate', nargs='?', type=str, help='Initialization date positional string')
+        # Explicit option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Initialization date option from UI dashboard picker')
 
     def handle(self, *args, **kwargs):
-        date_input = kwargs.get('date') or datetime.now().strftime('%Y-%m-%d')
-        if "-" not in date_input:
-            try: date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
-            except: pass
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
 
-        self.stdout.write(self.style.SUCCESS(f"🚀 Starting BMD-WRF Generation: {date_input}"))
+        # Intercept input parameter from either source
+        raw_date = ui_date if ui_date else positional_date
+        
+        # Default to current system timestamp if parameter fields are left completely blank
+        date_input = raw_date or datetime.now().strftime('%Y-%m-%d')
+        
+        # Handle transformation rules cleanly to match YYYY-MM-DD layout standard
+        if "-" not in date_input:
+            try: 
+                date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+            except: 
+                pass
+
+        self.stdout.write(self.style.SUCCESS(f"🚀 Starting BMD-WRF Pre-Monsoon Generation: {date_input}"))
         self.main(date_input)
 
     def get_observed_rainfall(self, station_gdf, station_name, given_date):
@@ -68,12 +82,10 @@ class Command(BaseCommand):
             if os.path.exists(filepath):
                 try:
                     with xr.open_dataset(filepath) as ds:
-                        # Standardize coordinates to prevent "x dimension not found"
                         ds_std = ds.rename({'lon': 'x', 'lat': 'y'})
                         ds_std.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
                         ds_std.rio.write_crs("epsg:4326", inplace=True)
                         
-                        # Clip with buffer and all_touched for accuracy
                         clipped = ds_std['precipitation'].rio.clip(station_gdf.geometry.buffer(0.01), station_gdf.crs, drop=True, all_touched=True)
                         weights = np.cos(np.deg2rad(clipped.y))
                         val = clipped.weighted(weights).mean().item()
@@ -90,32 +102,25 @@ class Command(BaseCommand):
 
         try:
             with xr.open_dataset(forecast_path) as ds:
-                # 1. Spatial Dimension Fix
                 ds_std = ds.rename({'lon': 'x', 'lat': 'y'})
                 ds_std.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
                 ds_std.rio.write_crs("epsg:4326", inplace=True)
                 ds_std = ds_std.sortby(['y', 'x'])
 
-                # 2. Extract and Squeeze Rainfall Variables
-                # Inspection showed shape (81, 1, 214, 214), so squeeze('lev') is needed
                 total_rain_da = ds_std['rainc'] + ds_std['rainnc']
                 if 'lev' in total_rain_da.dims: 
                     total_rain_da = total_rain_da.squeeze('lev')
 
-                # 3. Clip to Basin
                 clipped = total_rain_da.rio.clip(station_gdf.geometry.buffer(0.01), station_gdf.crs, drop=True, all_touched=True)
                 weights = np.cos(np.deg2rad(clipped.y))
                 basin_mean = clipped.weighted(weights).mean(dim=["x", "y"])
 
                 daily_inc = {}
-                # 4. De-accumulation Logic
-                # index 0 (00:00) is always 0.0. Index 8 (24h mark) is Day 1's rain.
                 prev_val = float(basin_mean.isel(time=0))
                 time_indices = list(range(8, len(basin_mean), 8)) 
                 
                 for i, idx in enumerate(time_indices):
                     curr_val = float(basin_mean.isel(time=idx))
-                    # Map to the calendar: i=0 is the run date (given_date)
                     target_date = (datetime.strptime(given_date, '%Y-%m-%d') + timedelta(days=i)).strftime('%Y-%m-%d')
                     daily_inc[target_date] = round(max(0.0, curr_val - prev_val), 4)
                     prev_val = curr_val
@@ -136,7 +141,6 @@ class Command(BaseCommand):
             
             station_gdf = gpd.read_file(json_path, crs="epsg:4326")
             
-            # --- GEOMETRY GUARD ---
             if station_gdf.empty or station_gdf.geometry.iloc[0] is None or station_gdf.geometry.iloc[0].is_empty:
                 continue
 
@@ -156,7 +160,6 @@ class Command(BaseCommand):
                 for p_date in forecast_range:
                     day_results = {}
                     for idx, (hours, thresh) in thresholds.items():
-                        # Rolling sum window
                         sum_range = [(p_date - timedelta(days=d)).normalize() for d in range(int(hours/24))]
                         total_rain = sum(combined_norm.get(d, 0.0) for d in sum_range)
                         day_results[idx] = round(total_rain, 2)

@@ -11,10 +11,25 @@ class Command(BaseCommand):
     help = 'Step 1: Compute Anomaly NetCDF from raw WRF and Climatology'
 
     def add_arguments(self, parser):
-        parser.add_argument('fdate', nargs='?', type=str)
+        # 1. Positional argument support for manual CLI backup runs
+        parser.add_argument('fdate', nargs='?', type=str, help='Date for forecast data in format YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **kwargs):
-        fdate = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+
+        if ui_date:
+            # Clean dashboard template dashes safely: '2026-06-30' -> '20260630'
+            fdate = ui_date.replace('-', '')
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter via UI Selector: {ui_date} -> Normalized to: {fdate}"))
+        elif positional_date:
+            fdate = positional_date
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter via Positional CLI: {fdate}"))
+        else:
+            fdate = dt.now().strftime('%Y%m%d')
+            self.stdout.write(self.style.NOTICE(f"###### No runtime date parameter detected. Defaulting to system time: {fdate}"))
         
         # Paths
         OUTPUT_ROOT = os.path.join(settings.BASE_DIR, 'assets', 'rainfall-anomaly', fdate, 'BMD-WRF')

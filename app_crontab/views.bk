@@ -9,27 +9,24 @@ from celery import states
 
 from .tasks import run_crontab_script_async
 
-# Dictionary registry containing only clean, deduplicated production tracking modules
+# Dictionary registry containing only the active blocks defined in cronjob.txt
 PRODUCTION_PIPELINE_REGISTRY = {
     "section_1_housekeeping": {
         "title": "1. Core Observations & Housekeeping",
         "description": "Primary telemetry ingestion scripts and automated filesystem cleaning routines.",
         "tasks": {
-            # "indian_water": {
-            #     "name": "Generate Indian Station Water",
-            #     "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/shellScripts/generate_indian_station_water.sh"]
-            # },
+            "indian_water": {
+                "name": "Generate Indian Station Water",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/shellScripts/generate_indian_station_water.sh"]
+            },
             "mswep_download": {
                 "name": "Download MSWEP Precipitation Stream",
-                "args": [
-                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
-                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/scripts/downloadMSWEP_daily.py"
-                ]
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/download_MSWEP.sh"]
             },
-            # "imd_station_process": {
-            #     "name": "Observation IMD Stations Wise Process",
-            #     "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/observation_imd_stations_wise_process.sh"]
-            # },
+            "imd_station_process": {
+                "name": "Observation IMD Stations Wise Process",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/observation_imd_stations_wise_process.sh"]
+            },
             "delete_old_files": {
                 "name": "Delete Old Files and Data Records",
                 "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/delete_old_files_and_data.sh"]
@@ -40,13 +37,13 @@ PRODUCTION_PIPELINE_REGISTRY = {
         "title": "2. Rainfall & Flood Summaries",
         "description": "Visual report compilers and spatial mapping distribution canvas construction routines.",
         "tasks": {
-            "rainfall_map_v2": {
-                "name": "Generate Rainfall Distribution Map (V2 Bash)",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_rainfall_distribution_map_v2.sh"]
+            "rainfall_map_v1": {
+                "name": "Generate Rainfall Distribution Map (V1)",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_rainfall_distribution_map.sh"]
             },
-            "rainfall_map_py": {
-                "name": "Generate Rainfall Distribution Map (Python Core)",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_rainfall_distribution_map"]
+            "rainfall_map_v2": {
+                "name": "Generate Rainfall Distribution Map (V2)",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_rainfall_distribution_map_v2.sh"]
             },
             "flood_summary": {
                 "name": "Generate Flood Summary Report",
@@ -58,8 +55,12 @@ PRODUCTION_PIPELINE_REGISTRY = {
         "title": "3. BMD Source Block & Anomalies",
         "description": "Bangladesh Meteorological Department high-resolution pipelines and spatial anomalies grids.",
         "tasks": {
+            "bmd_download_sh": {
+                "name": "Download & Crop BMDWRF HRES Data (Shell Script)",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_crop_bmdwrf_hres_data.sh"]
+            },
             "bmd_download_py": {
-                "name": "Download & Crop BMDWRF HRES Data",
+                "name": "Download & Crop BMDWRF HRES Data (Django Python Task)",
                 "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_crop_bmdwrf_hres_data"]
             },
             "bmd_monsoon_flash": {
@@ -71,12 +72,20 @@ PRODUCTION_PIPELINE_REGISTRY = {
                 "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_bmdwrf_pre_monsoon_basin_wise_flash_flood"]
             },
             "bmd_basin_forecast_py": {
-                "name": "Basin Wise Forecast BMDWRF",
+                "name": "Basin Wise Forecast BMDWRF (Django Command Interface)",
                 "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py basin_wise_forecast_bmdwrf"]
             },
             "bmd_vis_map_py": {
-                "name": "Visualize BMD WRF Process Forecast Map",
+                "name": "Visualize BMD WRF Process Forecast Map (Python Core)",
                 "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py vis_bmd_wrf_process_forecast_map"]
+            },
+            "bmd_vis_map_sh": {
+                "name": "Visualize BMD WRF Process Forecast Map (Shell Component Script)",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_bmd_wrf_process_forecast_map.sh"]
+            },
+            "bmd_basin_forecast_sh": {
+                "name": "Basin Wise Forecast BMDWRF Grid (Shell Executable Terminal)",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_bmdwrf.sh"]
             },
             "bmd_anomaly_base": {
                 "name": "Compute BMD Forecasting Spatial Anomalies Matrix",
@@ -125,12 +134,20 @@ PRODUCTION_PIPELINE_REGISTRY = {
                 "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ukmet_pre_monsoon_probabilistic_flash_flood"]
             },
             "ukmet_vis_map_py": {
-                "name": "Visualize UKMET Deterministic Process Forecast Map",
+                "name": "Visualize UKMET Deterministic Process Forecast Map (Python Module)",
                 "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py vis_ukmet_deterministic_process_forecast_map"]
             },
             "ukmet_basin_forecast_py": {
-                "name": "Basin Wise Forecast UKMET Deterministic",
+                "name": "Basin Wise Forecast UKMET Deterministic (Python Context Interface)",
                 "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py basin_wise_forecast_ukmet_deterministic"]
+            },
+            "ukmet_vis_map_sh": {
+                "name": "Visualize UKMET Deterministic Process Forecast Map (Shell Script Launcher)",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_ukmet_deterministic_process_forecast_map.sh"]
+            },
+            "ukmet_basin_forecast_sh": {
+                "name": "Basin Wise Forecast UKMET Deterministic (Shell Script Executable)",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_ukmet_deterministic.sh"]
             },
             "ukmet_anomaly_base": {
                 "name": "Compute UKMET Forecasting Spatial Anomaly Arrays",
@@ -183,15 +200,15 @@ PRODUCTION_PIPELINE_REGISTRY = {
                 "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ecmwf_pre_monsoon_probabilistic_flash_flood"]
             },
             "ecmwf_crop_hres": {
-                "name": "Download & Crop ECMWF HRES Boundary Data (Shell)",
+                "name": "Download & Crop ECMWF HRES Boundary Data (Shell Component Script)",
                 "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_crop_ecmwf_hres_data.sh"]
             },
             "ecmwf_vis_map": {
-                "name": "Visualize ECMWF HRES Dynamic Processing Forecast Maps Grids (Shell)",
+                "name": "Visualize ECMWF HRES Dynamic Processing Forecast Maps Grids",
                 "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_ecmwf_hres_process_forecast_map.sh"]
             },
             "ecmwf_basin_forecast": {
-                "name": "Basin Wise Forecast ECMWF HRES Numerical Calculations Grid (Shell)",
+                "name": "Basin Wise Forecast ECMWF HRES Numerical Calculations Grid",
                 "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_ecmwf_hres.sh"]
             },
             "ecmwf_anomaly_base": {
@@ -270,33 +287,58 @@ PRODUCTION_PIPELINE_REGISTRY = {
                 "name": "Generate Forecast: Cumilla Station Gauge",
                 "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_cumilla"]
             },
-            "forecast_sunamganj": {
-                "name": "Generate Forecast: Sunamganj Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_sunamganj"]
-            },
-            "forecast_sylhet": {
-                "name": "Generate Forecast: Sylhet Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_sylhet"]
-            },
-            "forecast_parshuram": {
-                "name": "Generate Forecast: Parshuram Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_parshuram"]
-            },
             "forecast_dalia": {
                 "name": "Generate Forecast: Dalia Station Gauge",
                 "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_dalia"]
             },
+            "forecast_sunamganj": {
+                "name": "Generate Forecast: Sunamganj Station Gauge",
+                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_sunamganj"]
+            },
+            
+            
             "forecast_brahmaputra": {
-                "name": "Generate Forecast: Brahmaputra Basin",
+                "name": "Generate Forecast: Brahmaputra Station Gauge",
                 "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_brahmaputra"]
             },
+            
             "forecast_ganges": {
-                "name": "Generate Forecast: Ganges Basin",
+                "name": "Generate Forecast: Ganges Station Gauge",
                 "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_ganges"]
             },
+            
+            
+            "forecast_sylhet": {
+                "name": "Generate Forecast: Sylhet Station Gauge",
+                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_sylhet"]
+            },
+            
+            
+            "forecast_parshuram": {
+                "name": "Generate Forecast: Parshuram Station Gauge",
+                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_parshuram"]
+            },
+            
+            
             "streamflow_forecast": {
-                "name": "Download Stream Flow Forecast Data",
+                "name": "Download Stream Flow Forecast Data (Shell Script)",
                 "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_stream_flow_forecast_data.sh"]
+            },
+            "monsoon_basin_flash_flood": {
+                "name": "Generate Monsoon Basin Wise Flash Flood",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_monsoon_basin_wise_flash_flood.sh"]
+            },
+            "ukmet_monsoon_basin": {
+                "name": "Generate UKMET Monsoon Basin Wise Flash Flood",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_ukmet_monsoon_basin_wise_flash_flood.sh"]
+            },
+            "monsoon_probabilistic": {
+                "name": "Generate Monsoon Probabilistic Flash Flood",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_monsoon_probabilistic_flash_flood.sh"]
+            },
+            "ukmet_monsoon_probabilistic": {
+                "name": "Generate UKMET Monsoon Probabilistic Flash Flood",
+                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_ukmet_monsoon_probabilistic_flash_flood.sh"]
             }
         }
     }
@@ -308,7 +350,7 @@ def crontab_dashboard_view(request):
     from django.contrib import admin
     context = admin.site.each_context(request)
     context.update({
-        'title': '',  # Strips old title header safely
+        'title': 'Operational Pipelines Production Controller Workspace',
         'pipeline_registry': PRODUCTION_PIPELINE_REGISTRY,
     })
     return render(request, 'admin/app_crontab/dashboard.html', context)
@@ -317,10 +359,9 @@ def crontab_dashboard_view(request):
 @csrf_protect
 @require_POST
 def crontab_trigger_json_view(request):
-    """Secure endpoint routing action codes and optional dates dynamically to background workers."""
+    """Secure endpoint routing action codes dynamically to background task configurations."""
     section_key = request.POST.get('section_key')
     task_key = request.POST.get('task_key')
-    custom_date = request.POST.get('custom_date')
     
     section_meta = PRODUCTION_PIPELINE_REGISTRY.get(section_key)
     script_meta = section_meta['tasks'].get(task_key) if section_meta else None
@@ -328,16 +369,8 @@ def crontab_trigger_json_view(request):
     if not script_meta:
         return JsonResponse({'status': 'error', 'message': 'The targeted pipeline parameter array mapping is invalid.'}, status=400)
 
-    command_args = list(script_meta['args'])
-
-    if custom_date:
-        if len(command_args) >= 3 and command_args[0] == "bash" and command_args[1] == "-lc":
-            command_args[2] = f"{command_args[2]} --date {custom_date}"
-        else:
-            command_args.extend(["--date", custom_date])
-
     try:
-        task = run_crontab_script_async.delay(script_meta['name'], command_args)
+        task = run_crontab_script_async.delay(script_meta['name'], script_meta['args'])
         return JsonResponse({
             'status': 'success',
             'message': f"Successfully launched backend process framework for: {script_meta['name']}",
@@ -348,7 +381,7 @@ def crontab_trigger_json_view(request):
 
 @staff_member_required
 def crontab_task_status_view(request, task_id):
-    """Poll endpoint reading execution diagnostic frames, stripping deprecation warnings."""
+    """Poll endpoint reading execution diagnostic frames from the active celery metadata tables backend."""
     result = AsyncResult(task_id)
     response_data = {
         'state': result.state,
@@ -366,6 +399,7 @@ def crontab_task_status_view(request, task_id):
         meta_info = result.result
         if isinstance(meta_info, dict):
             raw_stderr = meta_info.get('stderr', '')
+            # Filter out deprecation warnings line by line cleanly
             filtered_stderr = "\n".join([line for line in raw_stderr.splitlines() if 'DeprecationWarning' not in line])
             
             response_data.update({

@@ -10,10 +10,26 @@ class Command(BaseCommand):
     help = 'Robust 7-Day Weekly Anomaly for BMD-WRF with 1-day fallback'
 
     def add_arguments(self, parser):
-        parser.add_argument('fdate', nargs='?', type=str)
+        # 1. Positional argument support for manual CLI backup runs
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast date YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **kwargs):
-        fdate_input = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+
+        if ui_date:
+            # Clean dashboard template dashes safely: '2026-06-30' -> '20260630'
+            fdate_input = ui_date.replace('-', '')
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter via UI Selector: {ui_date} -> Normalized to: {fdate_input}"))
+        elif positional_date:
+            fdate_input = positional_date
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter via Positional CLI: {fdate_input}"))
+        else:
+            fdate_input = dt.now().strftime('%Y%m%d')
+            self.stdout.write(self.style.NOTICE(f"###### No runtime date parameter detected. Defaulting to system time: {fdate_input}"))
+
         date_obj = dt.strptime(fdate_input, '%Y%m%d')
         
         # --- Fallback Logic ---

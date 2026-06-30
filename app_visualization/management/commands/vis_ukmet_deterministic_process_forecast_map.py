@@ -11,7 +11,6 @@ import matplotlib.colors as mplcolors
 from netCDF4 import Dataset as nco, num2date
 from datetime import datetime as dt, timedelta as delt 
 from scipy.ndimage import zoom
-from tqdm import tqdm
 
 from ffwc_django_project.project_constant import app_visualization
 from app_visualization.models import Source, SystemState
@@ -23,7 +22,7 @@ class Command(BaseCommand):
     help = 'Generate geojson maps and legends for UKMET (Exact BMD-WRF Style)'
 
     def add_arguments(self, parser):
-        parser.add_argument('fdate', nargs='?', type=str, help='Date in YYYYMMDD format')
+        parser.add_argument('--date', type=str, help='Target date (YYYY-MM-DD or YYYYMMDD)')
 
     def update_state(self, forecast_date, source_obj):
         aware_date = timezone.make_aware(forecast_date) if timezone.is_naive(forecast_date) else forecast_date
@@ -34,7 +33,22 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **kwargs):
-        fdate = kwargs.get('fdate') or dt.now().strftime('%Y%m%d')
+        # 1. Parse the incoming date flag
+        date_input = kwargs.get('date')
+        
+        if not date_input:
+            fdate = dt.now().strftime('%Y%m%d')
+        else:
+            try:
+                if "-" in date_input:
+                    parsed_date = dt.strptime(date_input, "%Y-%m-%d")
+                    fdate = parsed_date.strftime("%Y%m%d")
+                else:
+                    dt.strptime(date_input, "%Y%m%d")
+                    fdate = date_input
+            except ValueError:
+                self.stderr.write(self.style.ERROR(f"Invalid date format: {date_input}. Expected YYYY-MM-DD or YYYYMMDD."))
+                return
         
         try:
             source_obj = Source.objects.get(
@@ -78,8 +92,11 @@ class Command(BaseCommand):
             'cldflo' : [], 'thi_min': [], 'thi_max': []
         }
 
-        # Processing loop
-        for day_idx in tqdm(range(len(dates_raw)), desc="Processing UKMET Map Layers"):
+        total_days = len(dates_raw)
+        self.stdout.write(f"Found {total_days} map layers to process for UKMET {fdate}...")
+
+        # Processing loop without tqdm, using explicit stdout logging instead
+        for day_idx in range(total_days):
             
             valid_end_dt = dates_raw[day_idx]
             valid_start_dt = valid_end_dt - delt(days=1)
@@ -92,13 +109,14 @@ class Command(BaseCommand):
             json_suffix = f'.F_{fdate}.S_{start_f}.E_{end_f}.geojson'
             cmap_suffix = f'.F_{fdate}.S_{start_f}.E_{end_f}.svg'
 
+            # --- Explicit Logging for Dashboard ---
+            self.stdout.write(f"[{day_idx + 1}/{total_days}] Generating UKMET layers for period: {start_bst} to {end_bst}")
+
             # UKMET standalone incremental data
             rf_d = rf_total[day_idx, :, :]
 
-
             ax = pl.axes()
             
-
             rf_cont_plot = pl.contourf(
                 zoom(lon, 4), zoom(lat, 4), zoom(rf_d, 4), 
                 levels=rf_levels, 
@@ -128,13 +146,15 @@ class Command(BaseCommand):
             )
             pl.close()
 
-        
             finfo['rf'].append({
                 'file'  : f'rf{json_suffix}',
                 'cmap'  : f'rf{cmap_suffix}',
                 'start' : start_bst,
                 'end'   : end_bst,
             })
+
+            # Confirm step saved
+            self.stdout.write(self.style.SUCCESS(f"  ---> Saved outputs: rf{json_suffix} & rf{cmap_suffix}"))
 
         with open(os.path.join(forecast_out_dir, f'info.{fdate}.json'), 'w') as infojw:
             json.dump(finfo, infojw, indent=2)

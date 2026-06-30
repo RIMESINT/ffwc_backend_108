@@ -21,7 +21,6 @@ from app_visualization.models import (
 from ffwc_django_project.project_constant import app_visualization
 
 # Constants
-# Based on your API response, both sources use this specific state name
 SYSTEM_STATE_NAME_BMD = "BMDWRF_HRES_VIS_DAILY"
 BMDWRF_BASE_URL = settings.BASE_DIR
 
@@ -35,11 +34,31 @@ class Command(BaseCommand):
     help = 'Process BMDWRF NetCDF into ForecastDaily and update SystemState for IDs 2 and 4'
 
     def add_arguments(self, parser):
+        # 1. Positional argument for automated cron backup tasks
         parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def to_pydt(self, cf_date):
         return pydt.datetime(cf_date.year, cf_date.month, cf_date.day, 
                              cf_date.hour, cf_date.minute, cf_date.second)
+
+    def handle(self, *args, **kwargs):
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+
+        if ui_date:
+            # Clean dashboard template dashes: '2026-06-30' -> '20260630'
+            fdate = ui_date.replace('-', '')
+            self.stdout.write(self.style.SUCCESS(f"###### Received date via UI Selector: {ui_date} -> Normalized to: {fdate}"))
+        elif positional_date:
+            fdate = positional_date
+            self.stdout.write(self.style.SUCCESS(f"###### Received date via Positional CLI: {fdate}"))
+        else:
+            fdate = dt.now().strftime('%Y%m%d')
+            self.stdout.write(self.style.NOTICE(f"###### No date provided. Defaulting to system date: {fdate}"))
+            
+        self.main(fdate)
 
     def gen_upazila_forecast(self, forecast_date, source_obj, ncf, file_path, basin_details):
         try:
@@ -133,11 +152,7 @@ class Command(BaseCommand):
         shf.close()
 
     def update_state(self, forecast_date_str, source_ids):
-        """
-        Updates SystemState for both source ID 2 and 4.
-        forecast_date_str: 'YYYY-MM-DD'
-        source_ids: List of IDs [2, 4]
-        """
+        """Updates SystemState for source IDs"""
         date_obj = dt.strptime(forecast_date_str, '%Y-%m-%d')
         aware_date = timezone.make_aware(date_obj)
         
@@ -156,7 +171,6 @@ class Command(BaseCommand):
     def main(self, date_str):
         forecast_date = dt.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d') 
         
-        # We use Source 4 to determine file paths and context
         try:
             source_obj = Source.objects.get(pk=4)
         except Source.DoesNotExist:
@@ -178,11 +192,5 @@ class Command(BaseCommand):
                 if os.path.exists(file_path):
                     self.gen_upazila_forecast(forecast_date, source_obj, ncf, file_path, basin)
 
-        # Update system state for both 2 (VIS) and 4 (Basin)
         self.update_state(forecast_date, [2, 4])
-        
         ncf.close()
-
-    def handle(self, *args, **kwargs):
-        fdate = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
-        self.main(fdate)
