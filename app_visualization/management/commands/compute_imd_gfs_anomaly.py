@@ -10,21 +10,29 @@ class Command(BaseCommand):
     help = 'Step 1: Compute Anomaly NetCDF from IMD-GFS (Accumulated tp) with fallback'
 
     def add_arguments(self, parser):
-        parser.add_argument('fdate', nargs='?', type=str)
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **kwargs):
-        fdate_input = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        fdate_input = raw_date or dt.now().strftime('%Y%m%d')
+        if "-" in fdate_input:
+            fdate_input = fdate_input.replace('-', '')
+
         date_obj = dt.strptime(fdate_input, '%Y%m%d')
         
         # 1. Fallback Logic
         IMD_NC_FILE = None
-        actual_fdate = fdate_input
         for i in range(2):
             check_date = (date_obj - timedelta(days=i)).strftime('%Y%m%d')
             temp_path = os.path.join(settings.BASE_DIR, 'forecast', 'imd_gfs', f'{check_date}.nc')
             if os.path.exists(temp_path):
                 IMD_NC_FILE = temp_path
-                actual_fdate = check_date
                 break
         
         if not IMD_NC_FILE:
@@ -39,8 +47,6 @@ class Command(BaseCommand):
         # 3. Load Datasets
         ds_climo = xr.open_dataset(CLIMO_PATH)
         ds_imd = xr.open_dataset(IMD_NC_FILE)
-        
-        # tp is kg/m2 which is already mm. No scaling needed.
         tp_acc = ds_imd['tp']
         
         # Crop Climatology to IMD box (72-98E, 20-32N)
@@ -55,7 +61,6 @@ class Command(BaseCommand):
 
         # 4. Calculation Loop
         for day in unique_days:
-            # We look for the 24-hour difference (e.g., 03:00 today to 03:00 tomorrow)
             t_start = pd.Timestamp(day) + timedelta(hours=3)
             t_end = t_start + timedelta(days=1)
             

@@ -11,33 +11,25 @@ from .tasks import run_crontab_script_async
 
 # Dictionary registry containing only clean, deduplicated production tracking modules
 PRODUCTION_PIPELINE_REGISTRY = {
-    "section_1_housekeeping": {
-        "title": "1. Core Observations & Housekeeping",
-        "description": "Primary telemetry ingestion scripts and automated filesystem cleaning routines.",
-        "tasks": {
-            # "indian_water": {
-            #     "name": "Generate Indian Station Water",
-            #     "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/shellScripts/generate_indian_station_water.sh"]
-            # },
-            "mswep_download": {
-                "name": "Download MSWEP Precipitation Stream",
-                "args": [
-                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
-                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/scripts/downloadMSWEP_daily.py"
-                ]
-            },
-            # "imd_station_process": {
-            #     "name": "Observation IMD Stations Wise Process",
-            #     "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/observation_imd_stations_wise_process.sh"]
-            # },
-            "delete_old_files": {
-                "name": "Delete Old Files and Data Records",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/delete_old_files_and_data.sh"]
-            }
-        }
-    },
+    # "section_1_housekeeping": {
+    #     "title": "1. Core Observations & Housekeeping",
+    #     "description": "Primary telemetry ingestion scripts and automated filesystem cleaning routines.",
+    #     "tasks": {
+    #         "mswep_download": {
+    #             "name": "Download MSWEP Precipitation Stream",
+    #             "args": [
+    #                 "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+    #                 "/home/rimes/ffwc-rebase/backend/ffwc_django_project/scripts/downloadMSWEP_daily.py"
+    #             ]
+    #         },
+    #         "delete_old_files": {
+    #             "name": "Delete Old Files and Data Records",
+    #             "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/delete_old_files_and_data.sh"]
+    #         }
+    #     }
+    # },
     "section_2_summaries": {
-        "title": "2. Rainfall & Flood Summaries",
+        "title": "1. Rainfall & Flood Summaries",
         "description": "Visual report compilers and spatial mapping distribution canvas construction routines.",
         "tasks": {
             "rainfall_map_v2": {
@@ -55,7 +47,7 @@ PRODUCTION_PIPELINE_REGISTRY = {
         }
     },
     "section_3_bmd": {
-        "title": "3. BMD Source Block & Anomalies",
+        "title": "2. BMD Source Block & Anomalies",
         "description": "Bangladesh Meteorological Department high-resolution pipelines and spatial anomalies grids.",
         "tasks": {
             "bmd_download_py": {
@@ -97,7 +89,7 @@ PRODUCTION_PIPELINE_REGISTRY = {
         }
     },
     "section_4_ukmet": {
-        "title": "4. UKMET Source Block & Anomalies",
+        "title": "3. UKMET Source Block & Anomalies",
         "description": "United Kingdom Meteorological Office data collection streams and anomaly projection canvas algorithms.",
         "tasks": {
             "ukmet_download_det": {
@@ -151,7 +143,7 @@ PRODUCTION_PIPELINE_REGISTRY = {
         }
     },
     "section_5_ecmwf": {
-        "title": "5. ECMWF Source Block & Anomalies",
+        "title": "4. ECMWF Source Block & Anomalies",
         "description": "European Centre for Medium-Range Weather Forecasts high-precision resolution models.",
         "tasks": {
             "ecmwf_download_01": {
@@ -213,7 +205,7 @@ PRODUCTION_PIPELINE_REGISTRY = {
         }
     },
     "section_6_imd": {
-        "title": "6. IMD SOURCE BLOCK & ANOMALIES",
+        "title": "5. IMD SOURCE BLOCK & ANOMALIES",
         "description": "India Meteorological Department GFS and WRF boundary tracking model components.",
         "tasks": {
             "imd_gfs_download": {
@@ -259,7 +251,7 @@ PRODUCTION_PIPELINE_REGISTRY = {
         }
     },
     "section_7_station_forecasts": {
-        "title": "7. STATION FORECASTS & SHARED SCRIPTS",
+        "title": "6. STATION FORECASTS & SHARED SCRIPTS",
         "description": "Localized gauge discharge metrics and shared programmatic flash flood forecast computations.",
         "tasks": {
             "forecast_amalshid": {
@@ -292,7 +284,7 @@ PRODUCTION_PIPELINE_REGISTRY = {
             },
             "forecast_ganges": {
                 "name": "Generate Forecast: Ganges Basin",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_ganges"]
+                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ganges"]
             },
             "streamflow_forecast": {
                 "name": "Download Stream Flow Forecast Data",
@@ -330,8 +322,10 @@ def crontab_trigger_json_view(request):
 
     command_args = list(script_meta['args'])
 
+    # Inject explicit custom execution keyword flags to process data cleanly
     if custom_date:
         if len(command_args) >= 3 and command_args[0] == "bash" and command_args[1] == "-lc":
+            # Safely append custom flags to complex bash string inputs
             command_args[2] = f"{command_args[2]} --date {custom_date}"
         else:
             command_args.extend(["--date", custom_date])

@@ -75,6 +75,7 @@ class Command(BaseCommand):
         # Rainfall calculation (Accumulated)
         rf_total = ncf.variables['rainc'][:] + ncf.variables['rainnc'][:]
         rf_obj = Parameter.objects.get(name='rf')
+        max_steps = len(dates_raw)
 
         for idx, i_shape in enumerate(tqdm(shf, desc=f"Processing {basin_details.name}")):
             try:
@@ -89,11 +90,15 @@ class Command(BaseCommand):
                 pys = scissor(shape_obj, lats, lons)
                 weight_grid = pys.get_masked_weight() 
 
-                # --- Process 10 Days ---
+                # --- Process Days Safely ---
                 upazila_data_daily = []
                 for day in range(10):
                     day_start_idx = (day) * 8
                     day_end_idx   = (day + 1) * 8
+                    
+                    # Prevent IndexError if file length is shorter than forecast range
+                    if day_end_idx >= max_steps:
+                        break
                     
                     dt_start = timezone.make_aware(self.to_pydt(dates_raw[day_start_idx]))
                     dt_end   = timezone.make_aware(self.to_pydt(dates_raw[day_end_idx]))
@@ -121,10 +126,14 @@ class Command(BaseCommand):
                 if upazila_data_daily:
                     ForecastDaily.objects.bulk_create(upazila_data_daily)
 
-                # --- Process 3-Hourly Steps ---
+                # --- Process 3-Hourly Steps Safely ---
                 upazila_data_steps = []
                 for t_step in range(0, 32):
                     s_idx, e_idx = t_step, t_step + 1
+                    
+                    if e_idx >= max_steps:
+                        break
+                        
                     dt_s = timezone.make_aware(self.to_pydt(dates_raw[s_idx]) + delt(hours=6))
                     dt_e = timezone.make_aware(self.to_pydt(dates_raw[e_idx]) + delt(hours=6))
 

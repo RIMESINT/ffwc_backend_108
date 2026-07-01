@@ -27,7 +27,10 @@ class Command(BaseCommand):
     help = 'Generate UKMET Deterministic Basin Forecast (Small Basin Optimized)'
 
     def add_arguments(self, parser):
+        # 1. Support positional arguments for direct crontab entries or manual console executions
         parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def to_pydt(self, cf_date):
         return pydt.datetime(cf_date.year, cf_date.month, cf_date.day, 
@@ -161,5 +164,15 @@ class Command(BaseCommand):
         ncf.close()
 
     def handle(self, *args, **kwargs):
-        fdate = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        if raw_date:
+            fdate = raw_date.replace('-', '')
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter: {raw_date} -> Normalized to: {fdate}"))
+        else:
+            fdate = dt.now().strftime('%Y%m%d')
+            self.stdout.write(self.style.NOTICE(f"###### No date provided. Defaulting to system date: {fdate}"))
+            
         self.main(fdate)

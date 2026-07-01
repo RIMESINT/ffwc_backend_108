@@ -10,12 +10,20 @@ class Command(BaseCommand):
     help = 'Step 1: Compute Anomaly NetCDF from UKMET Deterministic and Climatology'
 
     def add_arguments(self, parser):
-        # Accepts YYYYMMDD
-        parser.add_argument('fdate', nargs='?', type=str)
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Target date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **kwargs):
-        # 1. Date Parsing
-        fdate_input = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        # 1. Date Parsing and Sanitization
+        fdate_input = raw_date or dt.now().strftime('%Y%m%d')
+        if "-" in fdate_input:
+            fdate_input = fdate_input.replace('-', '')
         
         # 2. Paths
         OUTPUT_ROOT = os.path.join(settings.BASE_DIR, 'assets', 'rainfall-anomaly', fdate_input, 'UKMET')
@@ -30,51 +38,50 @@ class Command(BaseCommand):
             self.stdout.write(self.style.ERROR(f"❌ File not found: {UKMET_NC_FILE}"))
             return
 
-        # 3. Load and Prepare Data
-        ds_climo = xr.open_dataset(CLIMO_PATH)
-        ds_uk = xr.open_dataset(UKMET_NC_FILE)
-        
-        # Rename dimensions to avoid conflicts during interpolation
-        ds_uk = ds_uk.rename({'latitude': 'lat', 'longitude': 'lon'})
-        
-        # UKMET is already in mm, no scaling needed
-        uk_precip = ds_uk['tp']
-        
-        # Crop Climatology to match UKMET spatial extent
-        ds_climo_cropped = ds_climo.sel(
-            lat=slice(ds_uk.lat.max().item() + 0.5, ds_uk.lat.min().item() - 0.5),
-            lon=slice(ds_uk.lon.min().item() - 0.5, ds_uk.lon.max().item() + 0.5)
-        ).load()
-
-        all_times = pd.to_datetime(ds_uk.time.values)
-        anomaly_cubes = []
-
-        # 4. Calculation Loop
-        for t in all_times:
-            # Get Day of Year for the specific forecast timestamp
-            doy = t.dayofyear
+        # 3. Load and Prepare Data with Context Managers
+        with xr.open_dataset(CLIMO_PATH) as ds_climo, xr.open_dataset(UKMET_NC_FILE) as ds_uk:
             
-            self.stdout.write(f"Processing UKMET Anomaly for: {t.date()} (DOY: {doy})")
+            # Rename dimensions to avoid conflicts during interpolation
+            ds_uk = ds_uk.rename({'latitude': 'lat', 'longitude': 'lon'})
+            
+            # UKMET is already in mm, no scaling needed
+            uk_precip = ds_uk['tp']
+            
+            # Crop Climatology to match UKMET spatial extent
+            ds_climo_cropped = ds_climo.sel(
+                lat=slice(ds_uk.lat.max().item() + 0.5, ds_uk.lat.min().item() - 0.5),
+                lon=slice(ds_uk.lon.min().item() - 0.5, ds_uk.lon.max().item() + 0.5)
+            ).load()
 
-            # Extract daily total directly (UKMET is usually daily non-accumulated)
-            daily_rain = uk_precip.sel(time=t)
-            
-            # Regrid Forecast to Climatology Resolution
-            daily_regridded = daily_rain.interp(
-                lat=ds_climo_cropped.lat, 
-                lon=ds_climo_cropped.lon,
-                method="linear"
-            )
-            
-            # Get Climatology slice
-            climo_slice = ds_climo_cropped['precipitation'].sel(dayofyear=doy)
-            
-            # Compute Anomaly
-            day_anomaly = daily_regridded - climo_slice
-            anomaly_cubes.append(day_anomaly.expand_dims(time=[t]))
+            all_times = pd.to_datetime(ds_uk.time.values)
+            anomaly_cubes = []
 
-        # 5. Save NetCDF
-        if anomaly_cubes:
-            full_nc_path = os.path.join(OUTPUT_ROOT, f'ukmet_rainfall_anomaly_{fdate_input}.nc')
-            xr.concat(anomaly_cubes, dim='time').to_dataset(name='rainfall_anomaly').to_netcdf(full_nc_path)
-            self.stdout.write(self.style.SUCCESS(f"✅ UKMET Anomaly NetCDF Created: {full_nc_path}"))
+            # 4. Calculation Loop
+            for t in all_times:
+                # Get Day of Year for the specific forecast timestamp
+                doy = t.dayofyear
+                
+                self.stdout.write(f"Processing UKMET Anomaly for: {t.date()} (DOY: {doy})")
+
+                # Extract daily total directly (UKMET is usually daily non-accumulated)
+                daily_rain = uk_precip.sel(time=t)
+                
+                # Regrid Forecast to Climatology Resolution
+                daily_regridded = daily_rain.interp(
+                    lat=ds_climo_cropped.lat, 
+                    lon=ds_climo_cropped.lon,
+                    method="linear"
+                )
+                
+                # Get Climatology slice
+                climo_slice = ds_climo_cropped['precipitation'].sel(dayofyear=doy)
+                
+                # Compute Anomaly
+                day_anomaly = daily_regridded - climo_slice
+                anomaly_cubes.append(day_anomaly.expand_dims(time=[t]))
+
+            # 5. Save NetCDF
+            if anomaly_cubes:
+                full_nc_path = os.path.join(OUTPUT_ROOT, f'ukmet_rainfall_anomaly_{fdate_input}.nc')
+                xr.concat(anomaly_cubes, dim='time').to_dataset(name='rainfall_anomaly').to_netcdf(full_nc_path)
+                self.stdout.write(self.style.SUCCESS(f"✅ UKMET Anomaly NetCDF Created: {full_nc_path}"))

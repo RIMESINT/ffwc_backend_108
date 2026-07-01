@@ -1,395 +1,206 @@
-# management/commands/generate_forecast_data.py
-
-import os 
-import paramiko
-import threading
-import stat
-from pathlib import Path
-
-import xarray as xr
-import numpy as np
-import pandas as pd
-
-import cftime 
-import json
-import pylab as pl 
+import os
+import requests
 import numpy as np
 import netCDF4 as nc
-
-import subprocess
-from yaspin import yaspin
-from yaspin.spinners import Spinners
-
+from datetime import datetime as dt
 from django.core.management.base import BaseCommand
-# from django.conf import settings
-from ffwc_django_project import settings
-import geojsoncontour as gj 
-import mysql.connector as mconn 
-import matplotlib.colors as mplcolors
-
-from netCDF4 import Dataset as nco, num2date
-from datetime import datetime as dt, timedelta as delt 
-
-from scipy.ndimage import zoom
+from django.conf import settings
 from tqdm import tqdm
 
-from concurrent.futures import (
-    ThreadPoolExecutor, as_completed
-) 
+from app_visualization.models import Source
 
-from app_visualization.models import (
-    Source, SystemState
-)
+# Constants
+IMD_WRF_BASE_URL = settings.BASE_DIR
 
-from ffwc_django_project.project_constant import app_visualization
-SYSTEM_STATE_NAME_ECMWF_HRES = app_visualization['system_state_name'][6]
-BD_DETAILS = app_visualization['bd_details']
-ECMWF_BASE_URL = settings.BASE_DIR
-max_workers = 10
-
-
-
-
-
-
-
-
-print(" #################################################################")
-print(" ########## level_wise_forecast_ecmwf ############################")
-print(" #################################################################")
-###################################################################
-### PRINT CURRENT DATE TIME
-###################################################################
-curr_date_time = dt.now()
-curr_date_time_str = curr_date_time.strftime("%d-%m-%Y %H:%M:%S")
-print(" ########################## ", curr_date_time_str, " ##############")
-
-
-
-
-
-
-
-
-def sftp_connect(ftp_directory):
-    with open(ECMWF_BASE_URL / 'env.json', 'r') as envf:
-        env_ = json.load(envf)
-
-    SFTP_CONF = env_['imd_gfs_ftp_conf']
-
-    host = SFTP_CONF["HOST"]  # sftp.nwp.imd.gov.in
-    port = SFTP_CONF.get("PORT", 22)
-    username = SFTP_CONF["USER"]  # imdnwp
-    password = SFTP_CONF["PASSWORD"]
-
-    ssh = paramiko.SSHClient()
-    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    ssh.connect(hostname=host, port=port, username=username, password=password)
-    sftp = ssh.open_sftp()
-    
-    try:
-        sftp.chdir(ftp_directory)
-    except FileNotFoundError:
-        raise Exception(f"Remote directory {ftp_directory} not found")
-    
-    return ssh, sftp
-
-
-def r2(val):
-	return np.round(val,2)
-
-
-def thi_(temp:float,rh:float)->float:
-	# THI = 0.8 * t_db + RH * (t_tdb − 14.4) + 46.4
-	return (0.8*temp) + (rh/100)*(temp-14.4) + 46.4
-
+# Static grid extents matching the master canvas boundary configurations
+BMD_STATIC_EXTENT = {
+    'LAT_MIN': 13.38,
+    'LAT_MAX': 30.63,
+    'LON_MIN': 80.00,
+    'LON_MAX': 100.00
+}
 
 class Command(BaseCommand):
+    help = "Downloads, Merges, and Crops IMD WRF chunks using a static BMD-matching extent"
 
-	help = '[Generate location Forecast]'
+    def add_arguments(self, parser):
+        # 1. Positional argument support for manual CLI execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
+    def handle(self, *args, **options): 
+        ui_date = options.get('date')
+        positional_date = options.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
 
-	def add_arguments(self, parser):
-		parser.add_argument('fdate', nargs='?', type=str, help='Date for forecast data in format YYYYMMDD')
-		# pass
-		# parser.add_argument('date', type=str, help='date for netcdf file')
-	
+        if raw_date:
+            # Clean dashboard template dashes safely: '2026-07-01' -> '20260701'
+            fdate = raw_date.replace('-', '')
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter: {raw_date} -> Normalized to: {fdate}"))
+        else:
+            fdate = dt.now().strftime('%Y%m%d')
+            self.stdout.write(self.style.NOTICE(f"###### No date provided. Defaulting to system time: {fdate}"))
+        
+        try:
+            source_obj = Source.objects.get(name="IMD_WRF_VIS", source_type="vis")
+        except Source.DoesNotExist:
+            self.stderr.write(self.style.ERROR("Source IMD_WRF_VIS not found."))
+            return
 
-	def handle(self, *args, **kwargs):
-		fcst_date = kwargs['fdate']
+        download_output_dir = os.path.join(str(IMD_WRF_BASE_URL), source_obj.source_path.strip("/"), fdate)
+        
+        self.stdout.write(self.style.SUCCESS(f"Targeting Static BMD Extent: Lat {BMD_STATIC_EXTENT['LAT_MIN']} to {BMD_STATIC_EXTENT['LAT_MAX']}"))
+        self.process_pipeline(download_output_dir, fdate)
 
-		if fcst_date is None:
-			today_date = dt.now()
-			formatted_date = today_date.strftime('%Y%m%d')  # Date format = YYYYMMDD
-			print("formatted_date: ", formatted_date)
-			fcst_date = formatted_date
-		
-		# fcst_date = '20230516'
-		self.main(fcst_date)
-			
+    def crop_nc_file(self, file_path):
+        """Subsets the NetCDF file to match the BMD regional extent."""
+        temp_file = file_path + ".tmp"
+        if os.path.exists(temp_file): os.remove(temp_file)
+        os.rename(file_path, temp_file)
 
-	def download_data(self, fdate, folder_path, sftp, lock, filename):
-		"""Modified download method with 6 parameters (including self)"""
-		try:
-			if not os.path.exists(folder_path):
-				with lock:  # Thread-safe directory creation
-					os.makedirs(folder_path, exist_ok=True)
-					os.chmod(folder_path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO)
+        try:
+            with nc.Dataset(temp_file, 'r') as src:
+                lat = src.variables['lat'][:]
+                lon = src.variables['lon'][:]
+                
+                # Identify indices using the static BMD extent
+                lat_idx = np.where((lat >= BMD_STATIC_EXTENT['LAT_MIN']) & (lat <= BMD_STATIC_EXTENT['LAT_MAX']))[0]
+                lon_idx = np.where((lon >= BMD_STATIC_EXTENT['LON_MIN']) & (lon <= BMD_STATIC_EXTENT['LON_MAX']))[0]
 
-			local_path = os.path.join(folder_path, filename)
-			
-			if os.path.exists(local_path):
-				print(f"Skipping existing: {filename}")
-				return
+                if len(lat_idx) == 0 or len(lon_idx) == 0:
+                    raise ValueError("Static extent is outside the IMD WRF file's geographic range.")
 
-			# Thread-safe download with shared connection
-			with lock:
-				sftp.get(filename, local_path)
-				print(f"Downloaded: {filename}")
+                with nc.Dataset(file_path, 'w') as dst:
+                    # 1. Replicate Dimensions
+                    for name, dimension in src.dimensions.items():
+                        if name == 'lat':
+                            dst.createDimension(name, len(lat_idx))
+                        elif name == 'lon':
+                            dst.createDimension(name, len(lon_idx))
+                        else:
+                            dst.createDimension(name, len(dimension) if not dimension.isunlimited() else None)
 
-		except Exception as e:
-			print(f"Error in {filename}: {str(e)}")
+                    # 2. Replicate Variables with Spatial Slicing
+                    for name, variable in src.variables.items():
+                        dst_var = dst.createVariable(name, variable.datatype, variable.dimensions)
+                        dst_var.setncatts({k: variable.getncattr(k) for k in variable.ncattrs()})
+                        
+                        data = variable[:]
+                        if name == 'lat':
+                            dst_var[:] = lat[lat_idx]
+                        elif name == 'lon':
+                            dst_var[:] = lon[lon_idx]
+                        elif 'lat' in variable.dimensions and 'lon' in variable.dimensions:
+                            lat_dim = variable.dimensions.index('lat')
+                            lon_dim = variable.dimensions.index('lon')
+                            
+                            # Use np.take to safely extract the regional rectangle
+                            subset = np.take(data, lat_idx, axis=lat_dim)
+                            subset = np.take(subset, lon_idx, axis=lon_dim)
+                            dst_var[:] = subset
+                        else:
+                            dst_var[:] = data
 
+                    # 3. Global Attributes
+                    dst.setncatts({k: src.getncattr(k) for k in src.ncattrs()})
+            
+            os.remove(temp_file)
+            self.stdout.write(self.style.SUCCESS(f"Successfully cropped to {len(lat_idx)}x{len(lon_idx)} grid."))
+            return True
+        except Exception as e:
+            self.stderr.write(self.style.ERROR(f"Processing failed: {e}"))
+            if os.path.exists(temp_file): os.rename(temp_file, file_path)
+            return False
 
-	def merge_data(self, fdate, folder_path):
-		"""
-			##################################################
-			### Merge Hourly Steps IMD WRF data 
-			##################################################
-		"""
+    def merge_nc_chunks(self, output_path, chunk_paths):
+        """Combines multiple temporal netCDF chunks into a single target file."""
+        self.stdout.write(f"🔄 Merging {len(chunk_paths)} NetCDF chunks into master file...")
+        try:
+            if not chunk_paths:
+                return False
+                
+            # Use the first chunk to create structural layout mappings
+            with nc.Dataset(chunk_paths[0], 'r') as first_src:
+                with nc.Dataset(output_path, 'w') as dst:
+                    # Replicate global metadata attributes
+                    dst.setncatts({k: first_src.getncattr(k) for k in first_src.ncattrs()})
+                    
+                    # Create dimensions (handling unlimited time dimension dynamically)
+                    total_time_steps = 0
+                    for cp in chunk_paths:
+                        with nc.Dataset(cp, 'r') as c_src:
+                            total_time_steps += len(c_src.dimensions['time'])
+                            
+                    for name, dimension in first_src.dimensions.items():
+                        if name == 'time':
+                            dst.createDimension(name, total_time_steps)
+                        else:
+                            dst.createDimension(name, len(dimension) if not dimension.isunlimited() else None)
+                            
+                    # Initialize target template variables
+                    for name, variable in first_src.variables.items():
+                        dst_var = dst.createVariable(name, variable.datatype, variable.dimensions)
+                        dst_var.setncatts({k: variable.getncattr(k) for k in variable.ncattrs()})
+                        
+                        if 'time' not in variable.dimensions:
+                            dst_var[:] = variable[:]
+                            
+                    # Linearly concatenate spatial rainfall grid variables over time-series coordinates
+                    time_offset = 0
+                    for cp in chunk_paths:
+                        with nc.Dataset(cp, 'r') as c_src:
+                            time_len = len(c_src.dimensions['time'])
+                            for name, variable in c_src.variables.items():
+                                if 'time' in variable.dimensions:
+                                    dst_var = dst.variables[name]
+                                    time_dim_idx = variable.dimensions.index('time')
+                                    
+                                    # Write slicing arrays dynamically based on current chunk index bounds
+                                    if time_dim_idx == 0:
+                                        dst_var[time_offset:time_offset + time_len, ...] = variable[:]
+                                        
+                            time_offset += time_len
+            return True
+        except Exception as e:
+            self.stderr.write(self.style.ERROR(f"Chunk merging failed: {e}"))
+            if os.path.exists(output_path): os.remove(output_path)
+            return False
 
-		print(" ###### merge data date: ", fdate) 
-
-		try:
-			with yaspin(Spinners.dots, text="File Merging...") as spinner:
-				# result = subprocess.run(ncks_command, check=True, capture_output=True, text=True)
-
-				file_names = [f for f in os.listdir(folder_path) if f.startswith("WRF3km_INDIA-")]
-				file_names.sort()
-
-				# List of file paths
-				# WRF3km_INDIA-2024-05-12_00.nc
-				# file_names = ["AAA_WRF3km_INDIA-2024-05-12_00.nc", "AAA_WRF3km_INDIA-2024-05-12_01.nc"]  # Add more file paths as needed
-				print(" $$$$$$$$ file_names: ", file_names)
-				times_list = []
-				for file_path in file_names:
-					times_list.append(f"{file_path[13:23]} {file_path[24:26]}:00:00")
-				print(" ########### times_list: ", times_list)
-				times = pd.to_datetime(times_list)
-				# times = pd.to_datetime(["2024-05-12 00:00:00", "2024-05-12 01:00:00"])
-				# Create an empty list to store datasets
-				datasets = []
-
-				##########################################################################
-				# Open each file, assign time coordinates, and append to the datasets list
-				##########################################################################
-				idx = 0
-				for file_path in file_names:
-					ds = xr.open_dataset(str(folder_path)+str(file_path))
-					ds = ds.assign_coords(time=pd.to_datetime(times[idx]))
-					datasets.append(ds)
-					idx=idx+1
-
-				####################################################
-				# Merge the datasets along the new 'time' dimension
-				####################################################
-				merged_ds = xr.concat(datasets, dim='time')
-				
-				####################################################
-				# Write the merged dataset to a new NetCDF file
-				####################################################
-				merged_ds.to_netcdf(str(folder_path)+"merged_file.nc")
-				# print(" ########## File success fully merged ######### ")
-
-				####################################################
-				# Close the datasets
-				####################################################
-				for ds in datasets:
-					ds.close()
-				
-				
-				spinner.ok("✔")
-				print("File Merged successfully.") 
-
-				# print(f"Subset created and saved to {dst_file}")
-		except subprocess.CalledProcessError as e:
-			spinner.fail("✗")
-			print(f"An error occurred on File Merging: {e}")
-			print("Command Output:", e.stdout)
-			print("Command Error:", e.stderr)
-
-	
-	def crop_nc_file_for_bd(self, fdate, folder_path):
-		"""
-			################################################################
-			### Crop Merged Hourly Steps IMD WRF data for Bangladesh Only 
-			################################################################
-		"""
-
-
-		print(" ###### download_data date: ", fdate) 
-
-		try:
-			with yaspin(Spinners.dots, text="File Cropping...") as spinner:
-				# result = subprocess.run(ncks_command, check=True, capture_output=True, text=True)
-				
-		
-				# Open the source NetCDF file
-				src_file = str(folder_path) + "merged_file.nc"
-				dst_file = str(folder_path) + f"{fdate}.nc"
-
-				# Define the latitude and longitude bounds
-				lat_min = BD_DETAILS['BD_LAT_MIN']	#22.0
-				lat_max = BD_DETAILS['BD_LAT_MAX']	#28.0
-				lon_min = BD_DETAILS['BD_LON_MIN']	#86.0
-				lon_max = BD_DETAILS['BD_LON_MAX']	#97.0
-
-				# Open the source dataset
-				src_ds = nc.Dataset(src_file, 'r')
-
-				# Extract the latitude and longitude variables
-				lat = src_ds.variables['lat'][:]
-				lon = src_ds.variables['lon'][:]
-
-				# Find the indices that match the desired latitude and longitude ranges
-				lat_indices = np.where((lat >= lat_min) & (lat <= lat_max))[0]
-				lon_indices = np.where((lon >= lon_min) & (lon <= lon_max))[0]
-
-				# Open a new NetCDF file to store the subset
-				dst_ds = nc.Dataset(dst_file, 'w')
-
-				# Copy the dimensions
-				for name, dimension in src_ds.dimensions.items():
-					if name == 'lat':
-						dst_ds.createDimension(name, len(lat_indices))
-					elif name == 'lon':
-						dst_ds.createDimension(name, len(lon_indices))
-					else:
-						dst_ds.createDimension(name, len(dimension) if not dimension.isunlimited() else None)
-
-				# Copy the variables
-				for name, variable in src_ds.variables.items():
-					dst_var = dst_ds.createVariable(name, variable.datatype, variable.dimensions)
-					# Copy variable attributes
-					dst_var.setncatts({k: variable.getncattr(k) for k in variable.ncattrs()})
-					# Copy the variable data, only for the selected latitude and longitude ranges
-					if name == 'lat':
-						dst_var[:] = lat[lat_indices]
-					elif name == 'lon':
-						dst_var[:] = lon[lon_indices]
-					elif 'lat' in variable.dimensions and 'lon' in variable.dimensions:
-						lat_dim = variable.dimensions.index('lat')
-						lon_dim = variable.dimensions.index('lon')
-						data = variable[:]
-						# Use slicing to select the appropriate data range
-						if lat_dim == 1 and lon_dim == 2:
-							dst_var[:] = data[:, lat_indices, :][:, :, lon_indices]
-						elif lat_dim == 2 and lon_dim == 1:
-							dst_var[:] = data[:, :, lat_indices][:, lon_indices, :]
-						else:
-							raise ValueError(f"Unexpected dimension order in variable {name}")
-					else:
-						dst_var[:] = variable[:]
-
-				# Copy the global attributes
-				dst_ds.setncatts({k: src_ds.getncattr(k) for k in src_ds.ncattrs()})
-
-				# Close the datasets
-				src_ds.close()
-				dst_ds.close()
-
-				spinner.ok("✔")
-				print("File Cropped successfully.") 
-
-				# print(f"Subset created and saved to {dst_file}")
-		except subprocess.CalledProcessError as e:
-			spinner.fail("✗")
-			print(f"An error occurred on File Cropping: {e}")
-			print("Command Output:", e.stdout)
-			print("Command Error:", e.stderr)
-
-
-
-	def main(self, date):
-		source_obj = Source.objects.filter(
-			name="IMD_WRF_VIS", 
-			source_type="vis",
-			source_data_type__name="Forecast"
-		).first()
-		
-		if not source_obj:
-			print("Source configuration not found")
-			return
-
-		WRF_NC_LOC_ECMWF_HRES = source_obj.source_path
-		folder_path = str(ECMWF_BASE_URL) + str(WRF_NC_LOC_ECMWF_HRES) + str(f"{date}00/")
-		ftp_directory = f"/Pool_A/SFTP/UserHome/imdnwp/nwp_data/wrf_netcdf/{date}00/"
-		print(" &&&&&&&&&& folder_path: ", folder_path)
-
-		# Create local directory structure
-		# folder_path.mkdir(parents=True, exist_ok=True)
-		os.makedirs(folder_path, exist_ok=True)
-		os.chmod(
-			folder_path, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO
-		)  # chmod 777 permission
-		
-		# Establish single SFTP connection
-		try:
-			ssh, sftp = sftp_connect(ftp_directory)
-		except Exception as e:
-			print(f"Connection failed: {e}")
-			return
-
-		# Get list of files to download
-		try:
-			filenames = [f for f in sftp.listdir() 
-					if f.startswith('WRF3km_INDIA-') and f.endswith('.nc')]
-		except Exception as e:
-			print(f"Error listing files: {e}")
-			sftp.close()
-			ssh.close()
-			return
-
-		# Create thread lock for SFTP operations
-		lock = threading.Lock()
-
-		try:
-			with ThreadPoolExecutor(max_workers=max_workers) as executor:
-				# Prepare download tasks
-				futures = [
-					executor.submit(
-						self.download_data,
-						date,
-						str(folder_path),
-						sftp,
-						lock,
-						filename
-					)
-					for filename in filenames
-				]
-
-				# Monitor progress
-				with tqdm(total=len(futures), desc="Downloading files") as pbar:
-					for future in as_completed(futures):
-						try:
-							future.result()
-						except Exception as e:
-							print(f"\nDownload error: {e}")
-						finally:
-							pbar.update(1)
-
-			# Process files after download
-			self.merge_data(date, str(folder_path))
-			self.crop_nc_file_for_bd(date, str(folder_path))
-
-		finally:
-			# Cleanup connection
-			sftp.close()
-			ssh.close()
-			print("SFTP connection closed")
-		
-
-
-		
-
-
+    def process_pipeline(self, output_dir, fdate):
+        base_url = f"https://open-data.rimes.int/Regional/rimes/IMD/wrf/{fdate}/"
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Define multi-chunk layout files to download sequentially
+        chunk_names = ["wrf_part1.nc", "wrf_part2.nc", "wrf_part3.nc"]
+        chunk_paths = []
+        master_nc_path = os.path.join(output_dir, "tp.nc")
+        
+        try:
+            for chunk_name in chunk_names:
+                chunk_path = os.path.join(output_dir, chunk_name)
+                self.stdout.write(f"📥 Downloading chunk: {chunk_name}")
+                
+                response = requests.get(base_url + chunk_name, stream=True, timeout=60)
+                response.raise_for_status()
+                total_size = int(response.headers.get('content-length', 0))
+                
+                with open(chunk_path, "wb") as f, tqdm(total=total_size, unit='B', unit_scale=True, desc=f"Progress") as pbar:
+                    for chunk in response.iter_content(chunk_size=32768):
+                        if chunk:
+                            f.write(chunk)
+                            pbar.update(len(chunk))
+                chunk_paths.append(chunk_path)
+                
+            # Merge temporary data fragments, wipe raw blocks, and execute spatial cropping routines
+            if self.merge_nc_chunks(master_nc_path, chunk_paths):
+                for cp in chunk_paths:
+                    if os.path.exists(cp):
+                        os.remove(cp)
+                self.crop_nc_file(master_nc_path)
+                
+        except Exception as e:
+            self.stderr.write(self.style.ERROR(f"Pipeline Processing Error: {e}"))
+            # Clean up residual partial files if execution breaks midway
+            for cp in chunk_paths:
+                if os.path.exists(cp): os.remove(cp)

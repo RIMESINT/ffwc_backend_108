@@ -44,17 +44,31 @@ class Command(BaseCommand):
     help = 'Generates 11-day Probabilistic Forecasts with detailed tracing.'
 
     def add_arguments(self, parser):
-        parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYYMMDD)')
+        # 1. Support positional arguments for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast date (YYYYMMDD or YYYY-MM-DD)')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Forecast date from UI (YYYY-MM-DD)')
         parser.add_argument('--trace', action='store_true', help='Show detailed tracing')
 
     def handle(self, *args, **kwargs):
-        date_input = kwargs.get('date') or datetime.now().strftime('%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
         trace = kwargs.get('trace')
-        date_std = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+        
+        raw_date = ui_date if ui_date else positional_date
+        date_input = raw_date or datetime.now().strftime('%Y%m%d')
+        
+        # Strip dashes to normalize string formats seamlessly
+        clean_date = date_input.replace('-', '')
+        try:
+            date_std = datetime.strptime(clean_date, '%Y%m%d').strftime('%Y-%m-%d')
+        except ValueError:
+            self.stderr.write(self.style.ERROR(f"Invalid date format received: {date_input}"))
+            return
 
         if not self.run_forecast_for_date(date_std, trace):
             yesterday = (datetime.strptime(date_std, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
-            self.stdout.write(self.style.WARNING(f"Today's data missing. Trying yesterday: {yesterday}..."))
+            self.stdout.write(self.style.WARNING(f"Today's ensemble data missing. Trying yesterday's run: {yesterday}..."))
             self.run_forecast_for_date(yesterday, trace)
 
     def process_ensemble_member(self, station_gdf, forecast_dir, filename, run_date_str):
@@ -108,7 +122,6 @@ class Command(BaseCommand):
         combined_df.index = pd.to_datetime(combined_df.index).normalize()
         start_dt = pd.to_datetime(given_date).normalize()
         
-        # EXTENDED RANGE: Using range(12) to get Current Day + 11 Forecast Days
         forecast_range = [start_dt + timedelta(days=i) for i in range(12)]
         full_index = sorted(list(set(combined_df.index).union(set(forecast_range))))
         combined_df = combined_df.reindex(full_index, fill_value=0)
@@ -119,7 +132,7 @@ class Command(BaseCommand):
         }
         
         if trace:
-            self.stdout.write(f"\n{'='*90}\nBASIN: {station_name.upper()}\n{'='*90}")
+            self.stdout.write(f"\n{'='*90}\nPRE-MONSOON BASIN: {station_name.upper()}\n{'='*90}")
 
         for p_date in forecast_range:
             daily_probs = {}
@@ -164,7 +177,7 @@ class Command(BaseCommand):
             Ecmwf_Pre_Monsoon_Probabilistic_Flash_Flood_Forecast.objects.bulk_create(rows)
 
     def run_forecast_for_date(self, date_input, trace):
-        self.stdout.write(self.style.SUCCESS(f'--- Starting 11-Day Calculation: {date_input} ---'))
+        self.stdout.write(self.style.SUCCESS(f'--- Starting Pre-Monsoon 11-Day Probabilistic Calculation: {date_input} ---'))
         date_nodash = date_input.replace('-', '')
         forecast_dir = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_ens_data/{date_nodash}/"
         if not os.path.exists(forecast_dir): return False
@@ -188,4 +201,5 @@ class Command(BaseCommand):
             response = self.calculate_exceedance_probability(combined_rainfall_list, STATION_THRESHOLDS[basin_id], date_input, station_name, trace)
             if response:
                 self.save_to_database(response, date_input, basin_id)
+                self.stdout.write(f"  ✅ Processed {station_name} ({len(all_members_data)} members detected)")
         return True

@@ -46,12 +46,21 @@ class Command(BaseCommand):
     help = 'Generates 11-day UKMet Monsoon Probabilistic Forecasts with dynamic member detection and detailed tracing.'
 
     def add_arguments(self, parser):
-        parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYYMMDD)')
+        # FIX: Renamed positional variable to 'fdate' to resolve argument collisions with the UI flag option
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast date positional string (YYYYMMDD)')
+        # Explicit option parameter support for Django Admin UI layout hooks
+        parser.add_argument('--date', type=str, help='Explicit argument flag injected by dashboard panel')
         parser.add_argument('--trace', action='store_true', help='Show detailed tracing and rainfall amounts')
 
     def handle(self, *args, **kwargs):
-        date_input = kwargs.get('date') or datetime.now().strftime('%Y-%m-%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        date_input = raw_date or datetime.now().strftime('%Y-%m-%d')
         trace = kwargs.get('trace')
+        
+        # Normalize dash-less command strings cleanly into YYYY-MM-DD database format
         if "-" not in date_input:
             try: date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
             except: pass
@@ -110,85 +119,50 @@ class Command(BaseCommand):
         return pd.DataFrame(list(daily_precip.items()), columns=['Date', 'Rainfall'])
 
     def calculate_exceedance_probability(self, all_member_rainfall, thresholds, given_date, station_name, trace):
-            num_members = len(all_member_rainfall)
-            combined_df = pd.DataFrame(all_member_rainfall).T.fillna(0)
-            combined_df.index = pd.to_datetime(combined_df.index).normalize()
-            start_dt = pd.to_datetime(given_date).normalize()
-            
-            forecast_range = [start_dt + timedelta(days=i) for i in range(12)]
-            all_required_dates = sorted(list(set(combined_df.index).union(set(forecast_range))))
-            combined_df = combined_df.reindex(all_required_dates, fill_value=0)
-            
-            # Ensure metadata keys are strings
-            probability_results = {
-                "Hours": {str(k): v[0] for k, v in thresholds.items()},
-                "Thresholds": {str(k): v[1] for k, v in thresholds.items()}
-            }
+        num_members = len(all_member_rainfall)
+        combined_df = pd.DataFrame(all_member_rainfall).T.fillna(0)
+        combined_df.index = pd.to_datetime(combined_df.index).normalize()
+        start_dt = pd.to_datetime(given_date).normalize()
+        
+        forecast_range = [start_dt + timedelta(days=i) for i in range(12)]
+        all_required_dates = sorted(list(set(combined_df.index).union(set(forecast_range))))
+        combined_df = combined_df.reindex(all_required_dates, fill_value=0)
+        
+        probability_results = {
+            "Hours": {str(k): v[0] for k, v in thresholds.items()},
+            "Thresholds": {str(k): v[1] for k, v in thresholds.items()}
+        }
 
+        if trace:
+            self.stdout.write(f"\n{'-'*90}\nUKMET MONSOON BASIN: {station_name.upper()}\n{'-'*90}")
+
+        for p_date in forecast_range:
+            daily_probs = {}
             if trace:
-                self.stdout.write(f"\n{'-'*90}\nUKMET MONSOON BASIN: {station_name.upper()}\n{'-'*90}")
+                self.stdout.write(f"\nDATE: {p_date.strftime('%Y-%m-%d')}")
 
-            for p_date in forecast_range:
-                daily_probs = {}
-                if trace:
-                    self.stdout.write(f"\nDATE: {p_date.strftime('%Y-%m-%d')}")
-
-                for idx, values in thresholds.items():
-                    hour, threshold = values[0], values[1]
-                    days_to_sum = int(hour / 24)
-                    sum_range = [(p_date - timedelta(days=i)).normalize() for i in range(days_to_sum)]
-                    try:
-                        member_sums = combined_df.loc[sum_range].sum(axis=0)
-                        mean_rainfall = member_sums.mean()
-                        exceed_count = (member_sums >= threshold).sum()
-                        prob = round((exceed_count / num_members) * 100, 2)
-                        
-                        # USE str(idx) HERE TO MATCH METADATA
-                        daily_probs[str(idx)] = prob
-                        
-                        if trace:
-                            self.stdout.write(
-                                f"   Window: {hour:>3}h | Thresh: {threshold:7.2f}mm | "
-                                f"Mean Rain: {mean_rainfall:7.2f}mm | Prob: {prob:6.2f}% ({exceed_count}/{num_members})"
-                            )
-                    except Exception:
-                        daily_probs[str(idx)] = 0.0
-                
-                probability_results[p_date.strftime('%Y-%m-%d')] = daily_probs
-            return probability_results
-
-    def save_to_database(self, data_dict, prediction_date, basin_id):
-        if not data_dict or "Hours" not in data_dict:
-            return
-        
-        rows = []
-        # Extract metadata
-        h_meta = data_dict.get("Hours", {})
-        t_meta = data_dict.get("Thresholds", {})
-
-        for date_key, values in data_dict.items():
-            # Skip metadata keys
-            if date_key in ["Hours", "Thresholds"]:
-                continue
+            for idx, values in thresholds.items():
+                hour, threshold = values[0], values[1]
+                days_to_sum = int(hour / 24)
+                sum_range = [(p_date - timedelta(days=i)).normalize() for i in range(days_to_sum)]
+                try:
+                    member_sums = combined_df.loc[sum_range].sum(axis=0)
+                    mean_rainfall = member_sums.mean()
+                    exceed_count = (member_sums >= threshold).sum()
+                    prob = round((exceed_count / num_members) * 100, 2)
+                    
+                    daily_probs[str(idx)] = prob
+                    
+                    if trace:
+                        self.stdout.write(
+                            f"   Window: {hour:>3}h | Thresh: {threshold:7.2f}mm | "
+                            f"Mean Rain: {mean_rainfall:7.2f}mm | Prob: {prob:6.2f}% ({exceed_count}/{num_members})"
+                        )
+                except Exception:
+                    daily_probs[str(idx)] = 0.0
             
-            for idx_str, prob_value in values.items():
-                # Ensure we have metadata for this index
-                if idx_str in h_meta and idx_str in t_meta:
-                    rows.append(UKMetMonsoonProbabilisticFlashFloodForecast(
-                        prediction_date=prediction_date,
-                        basin_id=basin_id,
-                        date=datetime.strptime(date_key, "%Y-%m-%d").date(),
-                        hours=h_meta[idx_str],
-                        thresholds=t_meta[idx_str],
-                        value=prob_value if not math.isnan(prob_value) else 0.0
-                    ))
-        
-        if rows:
-            UKMetMonsoonProbabilisticFlashFloodForecast.objects.filter(
-                prediction_date=prediction_date, 
-                basin_id=basin_id
-            ).delete()
-            UKMetMonsoonProbabilisticFlashFloodForecast.objects.bulk_create(rows)
+            probability_results[p_date.strftime('%Y-%m-%d')] = daily_probs
+        return probability_results
 
     def save_to_database(self, data_dict, prediction_date, basin_id):
         if not data_dict or "Hours" not in data_dict: return
@@ -211,11 +185,10 @@ class Command(BaseCommand):
         self.stdout.write(self.style.SUCCESS(f'--- UKMET Monsoon Probabilistic Run: {date_input} ---'))
         success = False
         date_nodash = date_input.replace('-', '')
-        forecast_dir = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_ens_data/ukmet_ens_{date_nodash}/"
+        forecast_dir = os.path.join(settings.BASE_DIR, "forecast", "ukmet_ens_data", f"ukmet_ens_{date_nodash}")
 
         if not os.path.exists(forecast_dir): return False
         
-        # DYNAMIC MEMBER DETECTION
         member_files = sorted([f for f in os.listdir(forecast_dir) if f.startswith('precip_EN') and f.endswith('.nc')])
 
         for basin_id, station_name in STATION_DICT.items():

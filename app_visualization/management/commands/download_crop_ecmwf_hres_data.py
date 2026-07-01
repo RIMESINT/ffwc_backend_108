@@ -25,10 +25,23 @@ class Command(BaseCommand):
     help = "Downloads and Crops ECMWF data using a static BMD-matching extent"
 
     def add_arguments(self, parser):
+        # 1. Positional argument support for direct console execution and crontab macros
         parser.add_argument('fdate', nargs='?', type=str, help='Date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **options): 
-        fdate = options['fdate'] or dt.now().strftime('%Y%m%d')
+        ui_date = options.get('date')
+        positional_date = options.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        if raw_date:
+            # Clean dashboard template dashes safely: '2026-07-01' -> '20260701'
+            fdate = raw_date.replace('-', '')
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter: {raw_date} -> Normalized to: {fdate}"))
+        else:
+            fdate = dt.now().strftime('%Y%m%d')
+            self.stdout.write(self.style.NOTICE(f"###### No date provided. Defaulting to system time: {fdate}"))
         
         try:
             source_obj = Source.objects.get(name="ECMWF_HRES_VIS", source_type="vis")

@@ -45,19 +45,17 @@ class Command(BaseCommand):
     help = 'Generate Pre-Monsoon Flash Flood Forecast for BMD-WRF with level squeezing and spatial fix.'
 
     def add_arguments(self, parser):
-        # Support positional parameter for old console script execution compatibility
+        # 1. Positional argument support for direct console execution and crontab macros
         parser.add_argument('fdate', nargs='?', type=str, help='Initialization date positional string')
-        # Explicit option flag mapping to support date-picker from Django Dashboard UI
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
         parser.add_argument('--date', type=str, help='Initialization date option from UI dashboard picker')
 
     def handle(self, *args, **kwargs):
         ui_date = kwargs.get('date')
         positional_date = kwargs.get('fdate')
-
-        # Intercept input parameter from either source
         raw_date = ui_date if ui_date else positional_date
         
-        # Default to current system timestamp if parameter fields are left completely blank
+        # Fallback to current system timestamp if parameter fields are left completely blank
         date_input = raw_date or datetime.now().strftime('%Y-%m-%d')
         
         # Handle transformation rules cleanly to match YYYY-MM-DD layout standard
@@ -96,7 +94,7 @@ class Command(BaseCommand):
     def compute_basin_wise_forecast(self, station_gdf, station_name, given_date):
         date_str_nodash = given_date.replace('-', '')
         filename = f'wrf_out_{date_str_nodash}00.nc'
-        forecast_path = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/bmd_wrf/{filename}"
+        forecast_path = os.path.join(settings.BASE_DIR, "forecast", "bmd_wrf", filename)
 
         if not os.path.exists(forecast_path): return {}
 

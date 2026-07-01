@@ -1,243 +1,174 @@
-# management/commands/generate_forecast_data.py
-import cftime
+# management/commands/vis_imd_wrf_process_forecast_map.py
+
+from django.core.management.base import BaseCommand
+from django.conf import settings
 import os
 import json
 import pylab as pl 
 import numpy as np
-
-from django.core.management.base import BaseCommand
-from django.conf import settings
 import geojsoncontour as gj 
-import mysql.connector as mconn 
 import matplotlib.colors as mplcolors
-
 from netCDF4 import Dataset as nco, num2date
 from datetime import datetime as dt, timedelta as delt 
-
 from scipy.ndimage import zoom
 from tqdm import tqdm
 
-from app_visualization.models import (
-    Source, SystemState
-)
-
-
+from app_visualization.models import Source, SystemState
 from ffwc_django_project.project_constant import app_visualization
 
-SYSTEM_STATE_NAME_ECMWF_HRES = app_visualization['system_state_name'][8]
-
-ECMWF_BASE_URL = settings.BASE_DIR
-
-
-
-
-
-
-
-
-
+SOURCE_NAME = 'IMD_WRF_VIS'
+SYSTEM_STATE_NAME = app_visualization['system_state_name'][2]
+IMD_WRF_BASE_URL = settings.BASE_DIR
 
 class Command(BaseCommand):
-    help = 'Generate forecast data for BMDWRF'
+    help = 'Generate geojson and svg colorbar legends for IMD WRF Forecast Maps'
 
     def add_arguments(self, parser):
-        # parser.add_argument('fdate', type=str, help='Date for forecast data in format YYYYMMDD')
-        parser.add_argument('fdate', nargs='?', type=str, help='Date for forecast data in format YYYYMMDD')
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
-    
-    def calc_rh(self, temp:np.ndarray, dewtemp:np.ndarray)->np.ndarray:
-
-        ''' 
-            Using, August–Roche–Magnus approximation
-            RH = 100*( EXP( (17.625*TD) / (243.04+TD) ) / EXP( (17.625*T) / (243.04+T) ) )
-
-            a = 17.625
-            b = 243.04
-
-            ** 6.1094 ommited cause will calucate fraction later
-            es_td = (a*TD)/(b+TD)
-            es_t  = (a*T) /(b+T)
-
-            RH = 100*( exp(es_td) / exp(es_t) ) 
-        '''
-        a = 17.625
-        b = 243.04
-
-        es_td = (a * dewtemp) / (b + dewtemp)
-        es_t  = (a * temp)    / (b + temp)
-
-        return 100 * ( np.exp(es_td) / np.exp(es_t) )
-    
-    
     def update_state(self, forecast_date, source_obj):
-        """
-            Update system state
-        """
-
-        if SystemState.objects.filter(source=source_obj.id, name=SYSTEM_STATE_NAME_ECMWF_HRES).count()==0:
-            print('State dosent exists. Creating..')
-            SystemState(source=source_obj,last_update=forecast_date, name=SYSTEM_STATE_NAME_ECMWF_HRES).save()	
-        else:
-            print('State exists. updating..')
-            update_state = SystemState.objects.get(source=source_obj, name=SYSTEM_STATE_NAME_ECMWF_HRES)
-            update_state.last_update=forecast_date
-            update_state.save()
-    
+        SystemState.objects.update_or_create(
+            source=source_obj, 
+            name=SYSTEM_STATE_NAME,
+            defaults={'last_update': forecast_date}
+        )
 
     def handle(self, *args, **kwargs):
-        fdate = kwargs['fdate']
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
 
-        if fdate is None:
-            today_date = dt.now()
-            formatted_date = today_date.strftime('%Y%m%d')  # Date format = YYYYMMDD
-            # print("formatted_date: ", formatted_date)
-            fdate = formatted_date
+        if raw_date:
+            fdate = raw_date.replace('-', '')
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter: {raw_date} -> Normalized to: {fdate}"))
+        else:
+            fdate = dt.now().strftime('%Y%m%d')
+            self.stdout.write(self.style.NOTICE(f"###### No date provided. Defaulting to system time: {fdate}"))
 
-        # source object
-        source_obj = Source.objects.filter(
-            name="IMD_WRF_VIS", source_type="vis",
-            source_data_type__name="Forecast"
-        )[0]
+        try:
+            source_obj = Source.objects.get(
+                name=SOURCE_NAME, 
+                source_type="vis",
+                source_data_type__name="Forecast"
+            )
+        except Exception as e:
+            self.stderr.write(f"Source {SOURCE_NAME} not found: {e}")
+            return
 
-        WRF_NC_LOC_ECMWF_HRES = source_obj.source_path
-        JSON_OUT_LOC_ECMWF_HRES = source_obj.destination_path
-        
-        # read nc 
-        date_obj = dt.strptime(fdate, '%Y%m%d')
-        formatted_date_string = date_obj.strftime('%Y-%m-%d')
+        # Setup Paths
+        WRF_NC_LOC = source_obj.source_path
+        JSON_OUT_LOC = source_obj.destination_path
+        ncfile = os.path.join(IMD_WRF_BASE_URL, WRF_NC_LOC.strip('/'), fdate, 'tp.nc')
+        forecast_out_dir = os.path.join(IMD_WRF_BASE_URL, JSON_OUT_LOC.strip('/'), fdate)
 
-
-        # ncfile 			 = str(ECMWF_BASE_URL)+str(WRF_NC_LOC_ECMWF_HRES)+f'{fdate}00/WRF3km_INDIA-{formatted_date_string}_00.nc'
-        ncfile 			 = str(ECMWF_BASE_URL)+str(WRF_NC_LOC_ECMWF_HRES)+f'{fdate}00/{fdate}.nc'
-        forecast_out_dir = str(ECMWF_BASE_URL)+str(JSON_OUT_LOC_ECMWF_HRES)+str(fdate)
-        print("ncfile path: ", ncfile)
-        print("forecast_out_dir path: ", forecast_out_dir)
+        if not os.path.exists(ncfile):
+            self.stderr.write(f"File not found: {ncfile}")
+            return
 
         if not os.path.exists(forecast_out_dir):
             os.makedirs(forecast_out_dir)
 
-        #bmd rainfall colormap
-        # rf_colors=['#00dc00','#a0e632','#e6dc32','#e6af2d','#f08228','#fa3c3c','#f00082']
-        # rf_lvls = np.array([1,5,10,20,30,40,60,70,80])
-        # bmd_pr_dly_cmap = mplcolors.LinearSegmentedColormap.from_list('bmd_pr_dly_cmap',rf_colors)
-        # Custom rainfall colormap with discrete boundaries
+        # Visualization Styling
         rf_colors = ['#00DC00', '#A0E632', '#E6DC32', '#E6AF2D', '#F08228', '#FA3C3C', '#F00082']
-        # Define the boundaries for each color
-        rf_levels = [1, 10, 20, 40, 80, 160, 250, 1000]  # Added a high upper limit
+        rf_levels = [1, 10, 20, 40, 80, 160, 250, 1000]
         bmd_pr_dly_cmap = mplcolors.ListedColormap(rf_colors)
         norm = mplcolors.BoundaryNorm(rf_levels, bmd_pr_dly_cmap.N)
 
-
-        # for 
-
+        # Read NetCDF
         nf = nco(ncfile, 'r')
-
-        # get vars
-        lat      = nf.variables['lat'][:]
-        lon      = nf.variables['lon'][:]
-        time 	 = nf.variables['time']
-        dates 	 = num2date(time[:],time.units,time.calendar)
-
-        rf       = (nf.variables['APCP'][:])  #*1000 # m2mm : *1000
-        # rf       = nf.variables['rainc'][:,0,:,:]+nf.variables['rainnc'][:,0,:,:]
-
-        print(" $$$$$$$ dates: ", dates)
-        # return 
-
-        # generate daily rainfall geojson
-        # 81 steps
+        lat = nf.variables['lat'][:]
+        lon = nf.variables['lon'][:]
+        time_var = nf.variables['time']
+        dates_raw = num2date(time_var[:], time_var.units, time_var.calendar)
+        
+        # Determine variable target name dynamically
+        target_var = 'APCP_surface' if 'APCP_surface' in nf.variables else 'tp'
+        rf = nf.variables[target_var][:]
 
         finfo = {
-            'fdate'  : fdate,
-            'rf'     : [],
+            'fdate' : fdate,
+            'rf'    : [],
         }
 
-        for day in tqdm(range(3), desc="Processing Days"):
-        # for day in range(10):
-
-            start_step = day*24 
-            end_step   = day*24 + 24 
-
-            start_time = dates[start_step].strftime('%Y%m%d%H')
-            end_time   = dates[end_step].strftime('%Y%m%d%H')
-
-            start_time_bst = (dt.strptime(start_time,'%Y%m%d%H')+delt(hours=6)).strftime('%Y-%m-%d %H:%M')
-            end_time_bst   = (dt.strptime(end_time,'%Y%m%d%H')+delt(hours=6)).strftime('%Y-%m-%d %H:%M')
-
-
-            json_suffix = f'.F_{fdate}.S_{start_time}.E_{end_time}.geojson'
-            cmap_suffix = f'.F_{fdate}.S_{start_time}.E_{end_time}.svg'
-
-
-            # if day==0:
-            rf_d = rf[end_step,:,:]
-            # else:
-            #     rf_d = rf[end_step,:,:] - rf[start_step,:,:]
-            # rf_d      = rf[end_step] - rf[start_step]
-            # print("rf_d: ", rf_d)
-
-            # == Rainfall ==
-            ax      = pl.axes()
+        num_steps = len(dates_raw)
+        
+        # Process available forecast cycles step-by-step
+        for day in tqdm(range(num_steps - 1), desc="Processing IMD WRF Map Layers"):
+            valid_start_dt = dates_raw[day]
+            valid_end_dt = dates_raw[day + 1]
             
-            # max_rf  = int(rf_d.max()) 
-            # rf_diff    = int((max_rf-1)/20)
-            # #rf_levels = np.arange(1,max_rf+rf_diff,rf_diff)
-            # rf_levels    = np.array([1,5,10,20,30,50,70,100,150,200,250])
-            # rf_cont_plot = pl.contourf(zoom(lon,4),zoom(lat,4),zoom(rf_d,4),cmap='Spectral_r',levels=rf_levels,extend='max',vmin=1)
-            # Use discrete colors with BoundaryNorm
-            rf_cont_plot = pl.contourf(
-                zoom(lon,4), zoom(lat,4), zoom(rf_d,4), 
+            start_f = valid_start_dt.strftime('%Y%m%d%H')
+            end_f   = valid_end_dt.strftime('%Y%m%d%H')
+            
+            start_bst = (valid_start_dt + delt(hours=6)).strftime('%Y-%m-%d %H:%M')
+            end_bst   = (valid_end_dt + delt(hours=6)).strftime('%Y-%m-%d %H:%M')
+
+            json_suffix = f'.F_{fdate}.S_{start_f}.E_{end_f}.geojson'
+            cmap_suffix = f'.F_{fdate}.S_{start_f}.E_{end_f}.svg'
+
+            # Calculate slice intervals from accumulation steps
+            rf_d = rf[day + 1, :, :] - rf[day, :, :]
+            rf_d = np.maximum(rf_d, 0)
+
+            # --- 1. Generate GeoJSON Map Layer ---
+            fig_map = pl.figure()
+            ax_map = fig_map.add_axes([0, 0, 1, 1])
+            ax_map.axis('off')
+            
+            rf_cont_plot = ax_map.contourf(
+                zoom(lon, 4), zoom(lat, 4), zoom(rf_d, 4), 
                 levels=rf_levels, 
                 cmap=bmd_pr_dly_cmap, 
                 norm=norm,
                 extend='max'
             )
 
-            rf_geojson   = gj.contourf_to_geojson(rf_cont_plot)
-
-            with open(
-                os.path.join(
-                    forecast_out_dir,f'rf{json_suffix}'
-                ),'w'
-            ) as jfw:
+            rf_geojson = gj.contourf_to_geojson(rf_cont_plot)
+            with open(os.path.join(forecast_out_dir, f'rf{json_suffix}'), 'w') as jfw:
                 jfw.write(rf_geojson)
+            pl.close(fig_map)
 
-            # cbar = pl.colorbar(orientation='horizontal')
-            # cbar.outline.set_visible(False)
-            # Create colorbar with threshold values as labels
+            # --- 2. Generate SVG Legend ---
+            ax_leg = pl.axes()
+            rf_leg_plot = pl.contourf(
+                zoom(lon, 2), zoom(lat, 2), zoom(rf_d, 2), 
+                levels=rf_levels, 
+                cmap=bmd_pr_dly_cmap, 
+                norm=norm,
+                extend='max'
+            )
+            
             cbar = pl.colorbar(
-                rf_cont_plot, orientation='horizontal', 
+                rf_leg_plot, 
+                orientation='horizontal', 
                 ticks=rf_levels[:-1]
             )
-            cbar.set_ticklabels(
-                [
-                    '1', '10', '20', '40', 
-                    '80', '160', '250'
-                ]
-            )
+            cbar.set_ticklabels(['1', '10', '20', '40', '80', '160', '250'])
             cbar.outline.set_visible(False)
             
-            ax.remove()
-            pl.savefig(os.path.join(forecast_out_dir,f'rf{cmap_suffix}'),pad_inches=0,bbox_inches = 'tight')
+            ax_leg.remove()
+            pl.savefig(
+                os.path.join(forecast_out_dir, f'rf{cmap_suffix}'), 
+                transparent=True, 
+                pad_inches=0, 
+                bbox_inches='tight'
+            )
             pl.close()
-
-
-            # generate finfo.json
-            finfo['rf'].append(
-                {
+        
+            finfo['rf'].append({
                 'file'  : f'rf{json_suffix}',
                 'cmap'  : f'rf{cmap_suffix}',
-                'start' : start_time_bst,
-                'end'   : end_time_bst,
-                }
-            )
-        
+                'start' : start_bst,
+                'end'   : end_bst,
+            })
 
-        # save forecast info
-        with open(os.path.join(f'{forecast_out_dir}',f'info.{fdate}.json'),'w') as infojw:
-            json.dump(finfo, infojw)
-
-
-        # update state
-        self.update_state(date_obj, source_obj)
-
+        # Save Structural Info Metadata
+        with open(os.path.join(forecast_out_dir, f'info.{fdate}.json'), 'w') as infojw:
+            json.dump(finfo, infojw, indent=2)
+            
+        # Update Telemetry State Record
+        self.update_state(dt.strptime(fdate, '%Y%m%d'), source_obj)
+        nf.close()

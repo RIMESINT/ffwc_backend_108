@@ -1,6 +1,7 @@
-from django.core.management import BaseCommand
+# -*- coding: utf-8 -*-
+from django.core.management.base import BaseCommand
 from django.conf import settings
-from datetime import datetime
+from datetime import datetime, timedelta
 import pandas as pd
 import geopandas as gpd
 from pyidw import idw
@@ -16,28 +17,62 @@ import json
 from data_load.models import RainfallObservation, RainfallStation
 
 class Command(BaseCommand):
-    help = 'Generate Rainfall Distribution Map using latest data from database'
+    help = 'Generate Rainfall Distribution Map using latest data from database with Day-1 Fallback'
 
-    # def add_arguments(self, parser):
-    #     parser.add_argument('date', type=str, help='Date for generating Rainfall Distribution Map (YYYY-MM-DD)', default=None)
+    def add_arguments(self, parser):
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Target date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Target date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **kwargs):
-        dateInput = kwargs.get('date')
-        if dateInput:
-            print('Date Input From Parameter:', dateInput)
-        else:
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        if not raw_date:
+            # If no parameter is defined, check the latest database transaction log
             latest_observation = RainfallObservation.objects.filter(
                 rainfall__gte=0
             ).order_by('-observation_date').first()
             
             if latest_observation:
-                dateInput = latest_observation.observation_date.strftime('%Y-%m-%d')
-                print('Latest Date from Database:', latest_observation.observation_date)
+                date_input = latest_observation.observation_date.strftime('%Y-%m-%d')
+                self.stdout.write(f"Latest Date pulled from Database: {latest_observation.observation_date}")
             else:
-                dateInput = datetime.today().strftime('%Y-%m-%d')
-                print('No valid data found, using today:', dateInput)
+                date_input = datetime.today().strftime('%Y-%m-%d')
+                self.stdout.write(f"No valid data found anywhere, defaulting to current system date: {date_input}")
+        else:
+            date_input = raw_date
+            # Safely normalize dash-less cron inputs (YYYYMMDD -> YYYY-MM-DD)
+            if "-" not in date_input:
+                try:
+                    date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+                except:
+                    pass
 
-        self.main(dateInput)
+        # Execute processing chain with recursive historical day fallbacks
+        if not self.run_pipeline_for_date(date_input):
+            try:
+                current_dt = datetime.strptime(date_input, '%Y-%m-%d')
+                yesterday_str = (current_dt - timedelta(days=1)).strftime('%Y-%m-%d')
+                self.stdout.write(self.style.WARNING(f"⚠️ Data missing for target date: {date_input}. Attempting historical fallback to: {yesterday_str}..."))
+                self.run_pipeline_for_date(yesterday_str)
+            except Exception as e:
+                self.stderr.write(self.style.ERROR(f"Critical failure executing date fallback processing chain: {str(e)}"))
+
+    def run_pipeline_for_date(self, date_input):
+        self.stdout.write(self.style.NOTICE(f"--- Processing Rainfall Distribution Map for: {date_input} ---"))
+        extent_shapefile = os.path.join(settings.BASE_DIR, 'assets', 'shapes', 'Bangladesh_Border.shp')
+        
+        geoRainfall, allDF = self.generateGeoRainfall(date_input)
+        
+        # If both tracking metrics are empty, signal failure to trigger fallback loop
+        if geoRainfall.empty and allDF.empty:
+            return False
+            
+        self.generateTiff(extent_shapefile, geoRainfall, allDF, date_input)
+        return True
 
     def fromSql(self, dateInput):
         try:
@@ -65,10 +100,9 @@ class Command(BaseCommand):
             rainfall_data = pd.DataFrame(list(rainfall_data))
             
             if rainfall_data.empty:
-                print(f"No rainfall data for {dateInput or latest_rf_date}.")
+                print(f"No rainfall data for {dateInput}.")
                 return pd.DataFrame(), pd.DataFrame()
             
-            # Rename columns to match the previous structure for consistency in later steps
             rainfall_data.rename(columns={
                 'station_id__station_code': 'st_id',
                 'observation_date': 'rf_date'
@@ -79,29 +113,20 @@ class Command(BaseCommand):
             
             valid_data = rainfall_data[rainfall_data['rainfall'] >= 0].copy()
             if valid_data.empty:
-                print(f"No valid rainfall data (rainfall >= 0) for {dateInput or latest_rf_date}.")
+                print(f"No valid rainfall data (rainfall >= 0) for {dateInput}.")
                 return pd.DataFrame(), all_data
             
-            # Load station metadata from RainfallStation to map st_id to station names
             stations = RainfallStation.objects.all().values('station_code', 'name')
             stations_df = pd.DataFrame(list(stations))
             
-            # Map st_id (which is now station_code) to station name
             all_data_with_names = all_data.merge(stations_df, how='left', left_on='st_id', right_on='station_code')
             
-            # Log rainfall values for specific stations
-            target_st_codes = [19, 15, 14, 18]  # Corresponds to station_code
+            target_st_codes = [19, 15, 14, 18]
             for st_code in target_st_codes:
                 station_data = all_data_with_names[all_data_with_names['st_id'] == st_code]
                 if not station_data.empty:
                     station_name = station_data['name'].iloc[0] if pd.notna(station_data['name'].iloc[0]) else "Unknown"
                     print(f"Rainfall value for {station_name} (st_id {st_code}): {station_data['rainfall'].iloc[0]} mm")
-                else:
-                    print(f"Station with st_id {st_code} not found in data.")
-            
-            print("Valid DataFrame Columns:", valid_data.columns)
-            print("Valid DataFrame Head:\n", valid_data.head())
-            print("All DataFrame Head:\n", all_data.head())
             
             return valid_data[['st_id', 'rf_date', 'rainfall']], all_data[['st_id', 'rf_date', 'rainfall']]
         
@@ -111,32 +136,28 @@ class Command(BaseCommand):
 
     def generateGeoRainfall(self, dateInput):
         validDF, allDF = self.fromSql(dateInput)
-        print('Valid Rainfall Data Frame:', validDF)
-        print('All Rainfall Data Frame:', allDF)
+        if validDF.empty and allDF.empty:
+            return gpd.GeoDataFrame(), pd.DataFrame()
 
         if validDF.empty:
-            print("No valid rainfall data for the specified date.")
-            return gpd.GeoDataFrame(), pd.DataFrame()
+            print("No valid positive rainfall values available for mapping.")
+            return gpd.GeoDataFrame(), allDF
 
         validDF = validDF[['st_id', 'rainfall']].copy(deep=True)
         validDF.sort_values(by=["st_id"], inplace=True)
         validDF.reset_index(drop=True, inplace=True)
 
-        # Load station metadata from RainfallStation
         try:
             rainfall_stations = RainfallStation.objects.all().values('station_code', 'name', 'latitude', 'longitude')
             rainfall_stations_df = pd.DataFrame(list(rainfall_stations))
         except Exception as e:
             print(f"Error querying RainfallStation: {e}")
-            return gpd.GeoDataFrame(), pd.DataFrame()
+            return gpd.GeoDataFrame(), allDF
 
-        # Merge with rainfall data using st_id (from RainfallObservations, which is station_code) and station_code (from RainfallStation)
         rainfall_stations_df = rainfall_stations_df.merge(validDF, how='inner', left_on='station_code', right_on='st_id')
         if rainfall_stations_df.empty:
-            print("No matching stations found after merging.")
-            return gpd.GeoDataFrame(), pd.DataFrame()
+            return gpd.GeoDataFrame(), allDF
 
-        # Create GeoDataFrame with geometry
         geoRainfall = gpd.GeoDataFrame(
             rainfall_stations_df,
             geometry=gpd.points_from_xy(rainfall_stations_df.longitude, rainfall_stations_df.latitude)
@@ -157,18 +178,13 @@ class Command(BaseCommand):
         resized_raster_name = blank_filename.rsplit('.', 1)[0] + '_resized.tif'
 
         with rasterio.open(resized_raster_name) as baseRasterFile:
-            print("Raster Data Type:", baseRasterFile.dtypes[0])
             meta = baseRasterFile.meta.copy()
             output_filename = os.path.join(settings.BASE_DIR, 'assets', 'tiffOutput', f'rainfall_distribution_idw_{dateInput}.tif')
 
             if os.path.exists(output_filename):
                 os.remove(output_filename)
-                print(f"Removed existing file: {output_filename}")
 
-            # Define nodata value
             nodata_value = 32767
-
-            # Create country mask (True for areas outside the country, False inside)
             country_shape = gpd.read_file(extent_shapefile)
             country_mask = geometry_mask(
                 country_shape.geometry,
@@ -178,52 +194,28 @@ class Command(BaseCommand):
             )
 
             if geoRainfall.empty:
-                # When no rainfall data is available, set the entire area inside the country to 0 (white)
-                # and outside the country to nodata_value (transparent)
                 height, width = baseRasterFile.height, baseRasterFile.width
-                data_array = np.zeros((height, width), dtype=np.float64)  # Inside country: 0 (white)
-                data_array[country_mask] = nodata_value  # Outside country: nodata (transparent)
-                meta.update(
-                    count=1,
-                    dtype='float64',
-                    nodata=nodata_value
-                )
+                data_array = np.zeros((height, width), dtype=np.float64)
+                data_array[country_mask] = nodata_value
+                meta.update(count=1, dtype='float64', nodata=nodata_value)
                 with rasterio.open(output_filename, 'w', **meta) as std_idw:
                     std_idw.write(data_array, 1)
-                    print(f'{output_filename} File Written (No Data Case)')
+                    print(f'{output_filename} File Written (Blank Matrix Case)')
             else:
                 column_name = 'rainfall'
                 power = 4
                 search_radius = 4
                 obser_df = geoRainfall[['name']].copy()
                 
-                # Corrected way to get lon_index and lat_index for each point
                 obser_df['lon_index'] = [baseRasterFile.index(x, y)[1] for x, y in zip(geoRainfall.geometry.x, geoRainfall.geometry.y)]
                 obser_df['lat_index'] = [baseRasterFile.index(x, y)[0] for x, y in zip(geoRainfall.geometry.x, geoRainfall.geometry.y)]
-
                 obser_df['data_value'] = geoRainfall[column_name]
 
                 valid_data_mask = ~obser_df['data_value'].isna()
                 obser_df = obser_df[valid_data_mask].copy()
-                if obser_df.empty:
-                    print("No valid rainfall data after filtering.")
-                    height, width = baseRasterFile.height, baseRasterFile.width
-                    data_array = np.zeros((height, width), dtype=np.float64)  # Inside country: 0 (white)
-                    data_array[country_mask] = nodata_value  # Outside country: nodata (transparent)
-                    meta.update(
-                        count=1,
-                        dtype='float64',
-                        nodata=nodata_value
-                    )
-                    with rasterio.open(output_filename, 'w', **meta) as std_idw:
-                        std_idw.write(data_array, 1)
-                        print(f'{output_filename} File Written (No Valid Data)')
-                    return
 
-                print(f"Valid rainfall values min: {obser_df['data_value'].min()}, max: {obser_df['data_value'].max()}")
-                idw_array = np.zeros((baseRasterFile.height, baseRasterFile.width), dtype=np.float64)  # Default to 0 (white)
+                idw_array = np.zeros((baseRasterFile.height, baseRasterFile.width), dtype=np.float64)
 
-                # Create a mask for stations with missing data (-9999.0 or NaN)
                 rainfall_stations = RainfallStation.objects.all().values('station_code', 'name', 'latitude', 'longitude')
                 rainfall_stations_df = pd.DataFrame(list(rainfall_stations))
                 all_stations = rainfall_stations_df.merge(allDF, how='inner', left_on='station_code', right_on='st_id')
@@ -241,21 +233,15 @@ class Command(BaseCommand):
                         lon_idx, lat_idx = baseRasterFile.index(station.geometry.x.iloc[0], station.geometry.y.iloc[0])
                         if 0 <= lat_idx < baseRasterFile.height and 0 <= lon_idx < baseRasterFile.width:
                             missing_mask[lat_idx, lon_idx] = True
-                            print(f"Marked station {st_id_val} at ({lat_idx}, {lon_idx}) as missing.")
 
-                # Create a mask for actual station locations to preserve their values
                 station_mask = np.zeros((baseRasterFile.height, baseRasterFile.width), dtype=bool)
                 station_values = np.zeros((baseRasterFile.height, baseRasterFile.width), dtype=np.float64)
                 for idx, row in obser_df.iterrows():
-                    # The order for baseRasterFile.index is (longitude, latitude) but it returns (row, col)
-                    # row is y, col is x. So, lat_index is row and lon_index is col.
                     y, x = int(row['lat_index']), int(row['lon_index'])
                     if 0 <= x < baseRasterFile.width and 0 <= y < baseRasterFile.height:
                         station_mask[y, x] = True
                         station_values[y, x] = row['data_value']
-                        print(f"Station {row['name']} at ({y}, {x}) with value {row['data_value']} mm")
 
-                # Perform IDW interpolation
                 for x_col in range(baseRasterFile.width):
                     for y_row in range(baseRasterFile.height):
                         if country_mask[y_row, x_col]:
@@ -277,8 +263,6 @@ class Command(BaseCommand):
                         )
                         idw_array[y_row][x_col] = max(0, value)
 
-
-                # Apply Gaussian smoothing to interpolated areas
                 valid_mask = (idw_array > 0) & (~missing_mask) & (~station_mask)
                 smoothed_array = idw_array.copy()
                 if valid_mask.sum() > 0:
@@ -287,39 +271,12 @@ class Command(BaseCommand):
                     smoothed_array[valid_mask] = smoothed_data
                 smoothed_array[~valid_mask] = idw_array[~valid_mask]
 
-                # Set areas with rainfall between 0 and 0.1 mm to 0 (white)
                 low_rainfall_mask = (smoothed_array > 0) & (smoothed_array <= 0.1)
                 smoothed_array[low_rainfall_mask] = 0
-                print(f"Set {low_rainfall_mask.sum()} pixels to 0 (white) for rainfall between 0 and 0.1 mm.")
-
-                # Ensure missing stations are set to 0 (white)
                 smoothed_array[missing_mask] = 0
-                print(f"Set {missing_mask.sum()} pixels to 0 (white) for missing stations.")
-
-                # Ensure areas outside the country boundary are set to nodata (transparent)
                 smoothed_array[country_mask] = nodata_value
-                print(f"Set {country_mask.sum()} pixels to nodata ({nodata_value}) for areas outside country boundary.")
 
-                meta.update(
-                    count=1,
-                    dtype='float64',
-                    nodata=nodata_value
-                )
+                meta.update(count=1, dtype='float64', nodata=nodata_value)
                 with rasterio.open(output_filename, 'w', **meta) as std_idw:
                     std_idw.write(smoothed_array, 1)
-                    print(f'{output_filename} File Written (With Data Case)')
-
-
-    def main(self, dateInput):
-        # Changed extent_shapefile path to include 'shapes' subdirectory
-        extent_shapefile = os.path.join(settings.BASE_DIR, 'assets', 'shapes', 'Bangladesh_Border.shp')
-        geoRainfall, allDF = self.generateGeoRainfall(dateInput)
-        print('Geo Rainfall: ')
-        print(geoRainfall)
-
-        if len(geoRainfall) > 0:
-            print('Generating Rainfall Distribution Map...')
-        else:
-            print('No Data Available, generating white shape TIFF...')
-        
-        self.generateTiff(extent_shapefile, geoRainfall, allDF, dateInput)
+                    print(f'{output_filename} File Written Successfully.')

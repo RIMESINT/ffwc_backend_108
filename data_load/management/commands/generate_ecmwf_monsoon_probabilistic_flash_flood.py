@@ -32,9 +32,9 @@ STATION_THRESHOLDS = {
     3: {0: [24, 24.50], 1: [48, 41.50], 2: [72, 56.50], 3: [120, 83.00], 4: [168, 107.50], 5: [240, 141.00]},
     4: {0: [24, 25.00], 1: [48, 40.50], 2: [72, 53.50], 3: [120, 76.00], 4: [168, 96.00], 5: [240, 123.00]},
     5: {0: [24, 52.67], 1: [48, 65.83], 2: [72, 75.01], 3: [120, 88.42], 4: [168, 98.53], 5: [240, 110.52]},
-    6: {0: [24, 33.50], 1: [48, 51.84], 2: [72, 66.93], 3: [120, 92.34], 4: [168, 114.14], 5: [240, 142.90]},
+    6: {0: [24, 33.50], 1: [48, 51.84], 7: [72, 66.93], 3: [120, 92.34], 4: [168, 114.14], 5: [240, 142.90]},
     7: {0: [24, 41.37], 1: [48, 59.11], 2: [72, 72.82], 3: [120, 94.72], 4: [168, 112.63], 5: [240, 135.33]},
-    8: {0: [24, 28.77], 1: [48, 35.77], 2: [72, 40.63], 3: [120, 47.70], 4: [168, 53.02], 5: [240, 59.31]},
+    8: {0: [24, 28.77], 1: [48, 35.77], 2: [72, 40.63], 3: [120, 47.70], 4: [168, 53.01], 5: [240, 59.31]},
     9: {0: [24, 14.00], 1: [48, 22.00], 2: [72, 30.00], 3: [120, 44.00], 4: [168, 56.00], 5: [240, 73.00]},
     10: {0: [24, 48.22], 1: [48, 67.37], 2: [72, 81.94], 3: [120, 104.84], 4: [168, 123.33], 5: [240, 146.50]},
     11: {0: [24, 36.88], 1: [48, 60.99], 2: [72, 81.87], 3: [120, 118.63], 4: [168, 151.45], 5: [240, 196.20]},
@@ -46,17 +46,31 @@ class Command(BaseCommand):
     help = 'Generates ECMWF Probabilistic Flash Flood Forecasts using the ECMWF_Monsoon_Probabilistic_Flash_Flood_Forecast model.'
 
     def add_arguments(self, parser):
-        parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYYMMDD)')
+        # 1. Support positional arguments for manual console entries and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast date (YYYYMMDD or YYYY-MM-DD)')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Forecast date from UI (YYYY-MM-DD)')
         parser.add_argument('--trace', action='store_true', help='Show detailed member tracing and rainfall amounts')
 
     def handle(self, *args, **kwargs):
-        date_input = kwargs.get('date') or datetime.now().strftime('%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
         trace = kwargs.get('trace')
-        date_std = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+        
+        raw_date = ui_date if ui_date else positional_date
+        date_input = raw_date or datetime.now().strftime('%Y%m%d')
+        
+        # Strip dashes to normalize string to YYYY-MM-DD layout standard
+        clean_date = date_input.replace('-', '')
+        try:
+            date_std = datetime.strptime(clean_date, '%Y%m%d').strftime('%Y-%m-%d')
+        except ValueError:
+            self.stderr.write(self.style.ERROR(f"Invalid date format received: {date_input}"))
+            return
 
         if not self.run_forecast_for_date(date_std, trace):
             yesterday = (datetime.strptime(date_std, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
-            self.stdout.write(self.style.WARNING(f"Today's data missing. Trying yesterday: {yesterday}..."))
+            self.stdout.write(self.style.WARNING(f"Today's ensemble data missing. Trying yesterday's run: {yesterday}..."))
             self.run_forecast_for_date(yesterday, trace)
 
     def process_ensemble_member(self, station_gdf, forecast_dir, filename, run_date_str):
@@ -110,7 +124,6 @@ class Command(BaseCommand):
         combined_df.index = pd.to_datetime(combined_df.index).normalize()
         start_dt = pd.to_datetime(given_date).normalize()
         
-        # EXTENDED RANGE: range(12) for 11 forecast days
         forecast_range = [start_dt + timedelta(days=i) for i in range(12)]
         full_index = sorted(list(set(combined_df.index).union(set(forecast_range))))
         combined_df = combined_df.reindex(full_index, fill_value=0)
@@ -173,7 +186,6 @@ class Command(BaseCommand):
         forecast_dir = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_ens_data/{date_nodash}/"
         if not os.path.exists(forecast_dir): return False
         
-        # DYNAMIC MEMBER DETECTION
         member_files = sorted([f for f in os.listdir(forecast_dir) if f.startswith(date_nodash) and f.endswith('.nc')])
         
         for basin_id, station_name in STATION_DICT.items():

@@ -3,37 +3,29 @@ import ftplib
 import stat
 import paramiko
 import sys
-
-import xarray as xr
-import numpy as np
-import pandas as pd
-
-import cftime 
 import json
 import pylab as pl 
+import numpy as np
+import pandas as pd
+import xarray as xr
+import cftime 
 import netCDF4 as nc
-
 import subprocess
 from yaspin import yaspin
 from yaspin.spinners import Spinners
-
 from django.core.management.base import BaseCommand
 from django.conf import settings
 import geojsoncontour as gj 
 import mysql.connector as mconn 
 import matplotlib.colors as mplcolors
-
 from netCDF4 import Dataset as nco, num2date
 from datetime import datetime as dt, timedelta as delt 
-
 from scipy.ndimage import zoom
 from tqdm import tqdm
 
-from app_visualization.models import (
-    Source, SystemState
-)
-
+from app_visualization.models import Source, SystemState
 from ffwc_django_project.project_constant import app_visualization
+
 SYSTEM_STATE_NAME_ECMWF_HRES = app_visualization['system_state_name'][6]
 BD_DETAILS = app_visualization['bd_details']
 ECMWF_BASE_URL = settings.BASE_DIR
@@ -79,14 +71,16 @@ class Command(BaseCommand):
     def download_data(self, fdate, folder_path):
         """
             ##################################################
-            ### Download IMD WRF data from their FTP Server
+            ### Download BMD WRF data from their SFTP Server
             ##################################################
         """
         print(" ###### download_data date: ", fdate) 
         
         try:
             with yaspin(Spinners.dots, text="File Downloading...") as spinner:
-                with open(ECMWF_BASE_URL / 'env.json', 'r') as envf:
+                # Use robust os.path.join for loading environment configurations safely
+                env_file_path = os.path.join(str(ECMWF_BASE_URL), 'env.json')
+                with open(env_file_path, 'r') as envf:
                     env_ = json.load(envf)
 
                 FTP_CONF = env_['bmdwrf_ecmwf_ssh_conf']
@@ -108,10 +102,10 @@ class Command(BaseCommand):
                         destination_directory, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO
                     )  # chmod 777 permission
 
-                # Local file path
+                # Target temporary file for raw download to decouple source from crop target names
                 local_filepath = os.path.join(
                     destination_directory, 
-                    os.path.basename(remote_file_path)
+                    f"wrf_out_{fdate}00_main.nc"
                 )
 
                 print("Connecting to SSH server...")
@@ -138,10 +132,12 @@ class Command(BaseCommand):
                     destination_directory, stat.S_IRWXU | stat.S_IRWXG | stat.S_IRWXO
                 )
                 print("Permission provided successfully.")
+                return True
 
         except Exception as e:
             spinner.fail("✗")
             print(f"An error occurred during file sync transfer: {e}")
+            return False
         finally:
             if 'ssh' in locals():
                 ssh.close()
@@ -150,16 +146,20 @@ class Command(BaseCommand):
     def crop_nc_file_for_bd(self, fdate, folder_path):
         """
             ################################################################
-            ### Crop Merged Hourly Steps IMD WRF data for Bangladesh Only 
+            ### Crop Merged Hourly Steps BMD WRF data for Bangladesh Only 
             ################################################################
         """
         print(" ###### crop_nc_file_for_bd date: ", fdate) 
 
+        src_file = os.path.join(str(folder_path), f"wrf_out_{fdate}00_main.nc")
+        dst_file = os.path.join(str(folder_path), f"wrf_out_{fdate}00.nc")
+
+        if not os.path.exists(src_file):
+            print(f"❌ Missing source template for matrix crop: {src_file}")
+            return False
+
         try:
             with yaspin(Spinners.dots, text="File Cropping...") as spinner:
-                src_file = str(folder_path) + f"wrf_out_{fdate}00_main.nc"
-                dst_file = str(folder_path) + f"wrf_out_{fdate}00.nc"
-
                 lat_min = BD_DETAILS['BD_LAT_MIN']  
                 lat_max = BD_DETAILS['BD_LAT_MAX']  
                 lon_min = BD_DETAILS['BD_LON_MIN']  
@@ -208,11 +208,17 @@ class Command(BaseCommand):
                 src_ds.close()
                 dst_ds.close()
 
+                # Clean up the large raw source file after a successful crop to optimize system storage space
+                if os.path.exists(src_file):
+                    os.remove(src_file)
+
                 spinner.ok("✔")
                 print("File Cropped successfully.") 
+                return True
         except Exception as e:
             spinner.fail("✗")
             print(f"An error occurred during multi-dimensional matrix slicing: {e}")
+            return False
 
     def main(self, date):
         source_obj = Source.objects.filter(
@@ -222,7 +228,8 @@ class Command(BaseCommand):
         )[0]
         WRF_NC_LOC_ECMWF_HRES = source_obj.source_path
         
-        folder_path = str(ECMWF_BASE_URL) + str(WRF_NC_LOC_ECMWF_HRES)
+        folder_path = os.path.join(str(ECMWF_BASE_URL), WRF_NC_LOC_ECMWF_HRES.strip("/"))
         print(" $$$$$$ folder_path: ", folder_path) 
         
-        self.download_data(date, folder_path)
+        if self.download_data(date, folder_path):
+            self.crop_nc_file_for_bd(date, folder_path)

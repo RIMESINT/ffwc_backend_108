@@ -10,11 +10,10 @@
     }
     
     /* 2. FORCE 98% VIEWPORT WIDTH */
-    /* This is the exact rollback technique that successfully bypassed Django's limits */
     #content { 
         width: 98vw !important; 
         max-width: 98vw !important; 
-        margin: 0 auto !important; /* Centers it on the screen */
+        margin: 0 auto !important; 
         padding: 20px 0 !important; 
         box-sizing: border-box !important; 
     }
@@ -123,13 +122,13 @@
                 <div class="script-item-row">
                     <div class="script-info">
                         <div class="script-name-txt">{{ task.name }}</div>
-                        <code style="font-size: 11px; color: #666; font-family: monospace; background: var(--darkened-bg, #f5f5f5); padding: 3px 8px; border-radius: 3px; display: inline-block; word-break: break-all;">
+                        <code id="args-{{ section_key }}-{{ task_key }}" style="font-size: 11px; color: #666; font-family: monospace; background: var(--darkened-bg, #f5f5f5); padding: 3px 8px; border-radius: 3px; display: inline-block; word-break: break-all;">
                             {{ task.args|join:" " }}
                         </code>
                     </div>
                     
                     <div class="task-action">
-                        <input type="date" id="date-{{ section_key }}-{{ task_key }}" class="task-date-input" title="Optional: Select target date">
+                        <input type="date" id="date-{{ section_key }}-{{ task_key }}" class="task-date-input" title="Optional: Select target date" onchange="updateArgumentsPreview('{{ section_key }}', '{{ task_key }}', '{{ task.args|join:" " }}')">
                         <button type="button" class="trigger-btn" onclick="launchPipelineJob('{{ section_key }}', '{{ task_key }}', '{{ task.name }}')">
                             Run Script
                         </button>
@@ -162,9 +161,8 @@
 let telemetryTrackingInterval = null;
 
 document.addEventListener("DOMContentLoaded", function() {
-    // PURE JS ACCORDION: Completely isolated from Django CSS classes to stop bounce-back
+    // Accordion Initialization Logic
     const headers = document.querySelectorAll('.js-accordion-trigger');
-    
     headers.forEach(header => {
         header.addEventListener('click', function(e) {
             e.preventDefault();
@@ -174,19 +172,58 @@ document.addEventListener("DOMContentLoaded", function() {
             const bodyContainer = document.getElementById(targetId);
             const chevron = this.querySelector('.toggle-chevron');
             
-            // Directly manipulates the style instead of relying on a CSS class
             if (bodyContainer.style.display === 'block') {
                 bodyContainer.style.display = 'none';
                 chevron.innerText = '▶';
-                chevron.style.transform = 'translateY(-50%) rotate(0deg)';
             } else {
                 bodyContainer.style.display = 'block';
                 chevron.innerText = '▼';
-                chevron.style.transform = 'translateY(-50%) rotate(0deg)'; 
             }
         });
     });
+
+    // Set fallback default placeholder date for every date element input row
+    const todayStr = new Date().toISOString().split('T')[0];
+    document.querySelectorAll('.task-date-input').forEach(input => {
+        input.value = todayStr;
+        // Trigger a preview update to reflect initial dates inside standard code badges
+        const rowBox = input.closest('.script-container-box');
+        const runBtn = rowBox.querySelector('.trigger-btn');
+        const onclickAttr = runBtn.getAttribute('onclick');
+        const matches = onclickAttr.match(/'([^']+)'/g);
+        if (matches && matches.length >= 2) {
+            const sKey = matches[0].replace(/'/g, '');
+            const tKey = matches[1].replace(/'/g, '');
+            const codeBox = document.getElementById(`args-${sKey}-${tKey}`);
+            if (codeBox) {
+                const baseArgs = codeBox.innerText.split(' --date')[0];
+                updateArgumentsPreview(sKey, tKey, baseArgs);
+            }
+        }
+    });
 });
+
+function updateArgumentsPreview(sectionKey, taskKey, baseArgsStr) {
+    const codeBox = document.getElementById(`args-${sectionKey}-${taskKey}`);
+    const inputVal = document.getElementById(`date-${sectionKey}-${taskKey}`).value;
+    if (codeBox) {
+        if (inputVal) {
+            if (baseArgsStr.includes('bash -lc')) {
+                // Formatting layout rules for complex system string arguments
+                let splitParts = baseArgsStr.split('manage.py ');
+                if (splitParts.length === 2) {
+                    codeBox.innerText = `${splitParts[0]}manage.py ${splitParts[1]} --date ${inputVal}"`;
+                } else {
+                    codeBox.innerText = `${baseArgsStr} --date ${inputVal}`;
+                }
+            } else {
+                codeBox.innerText = `${baseArgsStr} --date ${inputVal}`;
+            }
+        } else {
+            codeBox.innerText = baseArgsStr;
+        }
+    }
+}
 
 function launchPipelineJob(sectionKey, taskKey, name) {
     const dateInput = document.getElementById(`date-${sectionKey}-${taskKey}`).value;

@@ -9,11 +9,25 @@ class Command(BaseCommand):
     help = 'Robust 7-Day Weekly Anomaly for ECMWF with 1-day fallback'
 
     def add_arguments(self, parser):
-        parser.add_argument('fdate', nargs='?', type=str)
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast date YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **kwargs):
-        fdate_input = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
-        date_obj = dt.strptime(fdate_input, '%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        fdate_input = raw_date or dt.now().strftime('%Y%m%d')
+        if "-" in fdate_input:
+            fdate_input = fdate_input.replace('-', '')
+
+        try:
+            date_obj = dt.strptime(fdate_input, '%Y%m%d')
+        except ValueError:
+            self.stdout.write(self.style.ERROR(f"Invalid date format: {fdate_input}. Use YYYYMMDD"))
+            return
         
         EC_NC_FILE = None
         for i in range(2):

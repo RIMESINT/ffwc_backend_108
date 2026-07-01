@@ -45,16 +45,14 @@ class Command(BaseCommand):
     help = 'Generate Monsoon Basin Wise Flashflood for BMD-WRF'
 
     def add_arguments(self, parser):
-        # Support positional arguments for old shell script fallback traces
-        parser.add_argument('date', nargs='?', type=str, help='Initialization date (YYYY-MM-DD)')
+        # FIX: Renamed positional variable to 'fdate' to resolve structural parsing overwrite bugs
+        parser.add_argument('fdate', nargs='?', type=str, help='Initialization date (YYYYMMDD or YYYY-MM-DD)')
         # Explicit option parameter support for Django Admin UI layout hooks
         parser.add_argument('--date', type=str, help='Explicit argument flag injected by dashboard panel')
 
     def handle(self, *args, **kwargs):
         ui_date = kwargs.get('date')
-        positional_date = kwargs.get('date') # Argparse maps positional to the 'date' target property if no double dash exists
-
-        # Resolve whichever parameter parameter configuration has tracking data
+        positional_date = kwargs.get('fdate')
         raw_date = ui_date if ui_date else positional_date
         
         # Fallback to current system timestamp if parameter fields are completely blank
@@ -92,7 +90,7 @@ class Command(BaseCommand):
     def compute_basin_wise_forecast(self, station_gdf, station_name, given_date):
         date_str_nodash = given_date.replace('-', '')
         filename = f'wrf_out_{date_str_nodash}00.nc'
-        forecast_path = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/bmd_wrf/{filename}"
+        forecast_path = os.path.join(settings.BASE_DIR, "forecast", "bmd_wrf", filename)
         if not os.path.isfile(forecast_path): return {}
         try:
             with xr.open_dataset(forecast_path) as ds:

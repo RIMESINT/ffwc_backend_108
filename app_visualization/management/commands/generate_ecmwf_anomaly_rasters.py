@@ -15,10 +15,19 @@ class Command(BaseCommand):
     help = 'Step 2: Generate GeoJSON maps and SVG legends for ECMWF Anomaly'
 
     def add_arguments(self, parser):
+        # 1. Positional argument support for direct console execution and crontab macros
         parser.add_argument('fdate', nargs='?', type=str, help='Forecast date YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **kwargs):
-        fdate = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        fdate = raw_date or dt.now().strftime('%Y%m%d')
+        if "-" in fdate:
+            fdate = fdate.replace('-', '')
         
         BASE_PATH = os.path.join(settings.BASE_DIR, 'assets', 'rainfall-anomaly', fdate, 'ECMWF')
         NC_FILE = os.path.join(BASE_PATH, f'ecmwf_rainfall_anomaly_{fdate}.nc')

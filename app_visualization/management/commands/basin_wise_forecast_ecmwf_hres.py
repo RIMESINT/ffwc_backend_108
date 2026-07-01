@@ -2,9 +2,8 @@
 import os
 import numpy as np
 import fiona
-import warnings
+import datetime as pydt
 from datetime import datetime as dt, timedelta as delt
-from tqdm import tqdm
 
 from django.core.management.base import BaseCommand
 from django.conf import settings
@@ -13,137 +12,193 @@ from django.utils import timezone
 from pyscissor import scissor 
 from netCDF4 import Dataset as nco, num2date
 from shapely.geometry import shape
+from tqdm import tqdm
 
 from app_visualization.models import (
-    Source, Parameter, ForecastDaily, SystemState, BasinDetails
+    Source, Parameter, ForecastDaily, SystemState,  
+    BasinDetails, ForecastSteps
 )
 from ffwc_django_project.project_constant import app_visualization
 
 # Constants
-BMDWRF_BASE_URL = settings.BASE_DIR
-SYSTEM_STATE_NAME_ECMWF_HRES = app_visualization['system_state_name'][4]
+SYSTEM_STATE_NAME_ECMWF = "ECMWF_HRES_VIS_DAILY"
+ECMWF_BASE_URL = settings.BASE_DIR
 
 def r2(val):
-    return np.round(val, 2)
+    """Rounding helper, ensures no negative results due to precision"""
+    if val is None or np.isnan(val):
+        return 0.0
+    return max(0.0, round(float(val), 2))
 
 class Command(BaseCommand):
-    help = 'Processes ECMWF HRES daily cumulative data starting from Run Date (Index 0)'
+    help = 'Process ECMWF HRES NetCDF into ForecastDaily and update SystemState for IDs 2 and 4'
 
     def add_arguments(self, parser):
+        # 1. Positional argument support for manual CLI execution and crontab macros
         parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
+
+    def to_pydt(self, cf_date):
+        return pydt.datetime(cf_date.year, cf_date.month, cf_date.day, 
+                             cf_date.hour, cf_date.minute, cf_date.second)
 
     def handle(self, *args, **kwargs):
-        fcst_date = kwargs.get('fdate') or dt.now().strftime('%Y%m%d')
-        self.stdout.write(self.style.SUCCESS(f"🚀 Processing Forecast Run: {fcst_date}"))
-        self.main(fcst_date)
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        if raw_date:
+            # Clean dashboard template dashes safely: '2026-07-01' -> '20260701'
+            fdate = raw_date.replace('-', '')
+            self.stdout.write(self.style.SUCCESS(f"###### Received date parameter: {raw_date} -> Normalized to: {fdate}"))
+        else:
+            fdate = dt.now().strftime('%Y%m%d')
+            self.stdout.write(self.style.NOTICE(f"###### No date provided. Defaulting to system date: {fdate}"))
+            
+        self.main(fdate)
 
     def gen_upazila_forecast(self, forecast_date, source_obj, ncf, file_path, basin_details):
         try:
             shf = fiona.open(file_path, 'r') 
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f"Error opening SHP {file_path}: {e}"))
+            self.stdout.write(self.style.ERROR(f"Error opening {file_path}: {e}"))
             return
 
-        # 1. Setup Time and Coordinates
-        lats, lons = ncf.variables['lat'][:], ncf.variables['lon'][:]
-        times_var = ncf.variables['time']
-        raw_dates = num2date(times_var[:], times_var.units, times_var.calendar)
+        lats = ncf.variables['lat'][:]
+        lons = ncf.variables['lon'][:]
+        times = ncf.variables['time']
+        dates_raw = num2date(times[:], times.units, times.calendar)
         
-        # Standardize dates to timezone-aware Python datetimes
-        dates = []
-        for d in raw_dates:
-            std_dt = dt(d.year, d.month, d.day, d.hour, d.minute, d.second)
-            dates.append(timezone.make_aware(std_dt) if timezone.is_naive(std_dt) else std_dt)
-
-        # tp is cumulative (meters)
-        rf = ncf.variables['tp'][:] * 1000 
+        # Rainfall calculation (Accumulated 'tp' variable)
+        rf_total = ncf.variables['tp'][:]
         rf_obj = Parameter.objects.get(name='rf')
-        
-        # Initialization Date (e.g., 2026-03-28)
-        run_date_obj = dt.strptime(forecast_date, '%Y-%m-%d').date()
 
-        # Attribute safe check
-        display_name = getattr(basin_details, 'basin_name', getattr(basin_details, 'name', f"Basin_{basin_details.id}"))
+        num_steps = len(dates_raw)
+        available_days = int((num_steps - 1) / 8)
 
-        for idx, i_shape in enumerate(tqdm(shf, desc=f"Extracting: {display_name}")):
+        for idx, i_shape in enumerate(tqdm(shf, desc=f"Processing {basin_details.name}")):
             try:
-                geom = shape(i_shape['geometry'])
-                if not geom.is_valid: geom = geom.buffer(0)
-                if geom.geom_type not in ['Polygon', 'MultiPolygon'] or geom.is_empty: continue
-                
-                pys = scissor(geom, lats, lons)
+                geom_raw = i_shape.get('geometry')
+                if not geom_raw:
+                    continue
+
+                shape_obj = shape(geom_raw)
+                if shape_obj.is_empty or shape_obj.geom_type not in ['Polygon', 'MultiPolygon']:
+                    continue
+
+                pys = scissor(shape_obj, lats, lons)
                 weight_grid = pys.get_masked_weight() 
-            except Exception: continue
 
-            upazila_data_daily = []
+                # --- Process Days ---
+                upazila_data_daily = []
+                for day in range(available_days):
+                    day_start_idx = day * 8
+                    day_end_idx   = day * 8 + 8
+                    
+                    if day_end_idx >= num_steps:
+                        break
 
-            # 2. Logic: Index 0 is the Run Date's accumulation
-            for d_idx in range(len(dates)):
-                current_step_dt = dates[d_idx]
+                    dt_start = timezone.make_aware(self.to_pydt(dates_raw[day_start_idx]))
+                    dt_end   = timezone.make_aware(self.to_pydt(dates_raw[day_end_idx]))
+
+                    diff = rf_total[day_end_idx, :, :] - rf_total[day_start_idx, :, :]
+                    rf_day = np.maximum(0, diff)
+                    
+                    rf_day_masked  = np.ma.masked_array(rf_day, mask=weight_grid.mask)
+                    rf_max_val_day = rf_day_masked.max()
+                    rf_min_val_day = rf_day_masked.min()
+                    rf_avg_val_day = np.average(rf_day, weights=weight_grid)
+
+                    upazila_data_daily.append(ForecastDaily(
+                        parameter=rf_obj,
+                        source=source_obj, 
+                        basin_details=basin_details,
+                        step_start=dt_start,
+                        step_end=dt_end,
+                        forecast_date=forecast_date,
+                        val_min=r2(rf_min_val_day),
+                        val_avg=r2(rf_avg_val_day),
+                        val_max=r2(rf_max_val_day),
+                    ))
+
+                if upazila_data_daily:
+                    ForecastDaily.objects.bulk_create(upazila_data_daily)
+
+                # --- Process 3-Hourly Steps ---
+                upazila_data_steps = []
+                for t_step in range(num_steps - 1):
+                    s_idx, e_idx = t_step, t_step + 1
+                    dt_s = timezone.make_aware(self.to_pydt(dates_raw[s_idx]) + delt(hours=6))
+                    dt_e = timezone.make_aware(self.to_pydt(dates_raw[e_idx]) + delt(hours=6))
+
+                    diff_step = rf_total[e_idx, :, :] - rf_total[s_idx, :, :]
+                    rf_step = np.maximum(0, diff_step)
+                    rf_avg_step = np.average(rf_step, weights=weight_grid)
+
+                    upazila_data_steps.append(ForecastSteps(
+                        parameter=rf_obj,
+                        source=source_obj,
+                        basin_details=basin_details,
+                        step_start=dt_s,
+                        step_end=dt_e,
+                        forecast_date=forecast_date,
+                        val_max=r2(rf_avg_step)
+                    ))
                 
-                if d_idx == 0:
-                    # Based on inspection, rf[0] is the 24-hour total for the run date
-                    rf_day = rf[0, :, :]
-                    # Spans from run_date 00:00 to the first timestamp (next day 00:00)
-                    step_start = timezone.make_aware(dt.combine(run_date_obj, dt.min.time()))
-                    step_end = current_step_dt
-                else:
-                    # Standard daily increment: (Current - Previous)
-                    rf_day = rf[d_idx, :, :] - rf[d_idx - 1, :, :]
-                    step_start = dates[d_idx - 1]
-                    step_end = current_step_dt
+                if upazila_data_steps:
+                    ForecastSteps.objects.bulk_create(upazila_data_steps)
 
-                # Cleanup numerical noise and spatial averaging
-                rf_day[rf_day < 0] = 0
-                rf_day_masked = np.ma.masked_array(rf_day, mask=weight_grid.mask)
-                avg_val = np.average(rf_day, weights=weight_grid)
-
-                upazila_data_daily.append(ForecastDaily(
-                    parameter=rf_obj,
-                    source=source_obj,
-                    basin_details=basin_details,     
-                    step_start=step_start,
-                    step_end=step_end,
-                    forecast_date=forecast_date,
-                    val_min=r2(rf_day_masked.min()),
-                    val_avg=r2(avg_val),
-                    val_max=r2(rf_day_masked.max()),
-                    val_avg_day=0,
-                    val_avg_night=0,
-                ))
-                
-                if len(upazila_data_daily) >= 10: break
-
-            if upazila_data_daily:
-                ForecastDaily.objects.bulk_create(upazila_data_daily)
+            except Exception as e:
+                print(f"\n[CRITICAL ERROR] Failed index {idx} in {basin_details.name}: {e}")
+                continue
         
         shf.close()
 
+    def update_state(self, forecast_date_str, source_ids):
+        """Updates SystemState for source IDs"""
+        date_obj = dt.strptime(forecast_date_str, '%Y-%m-%d')
+        aware_date = timezone.make_aware(date_obj)
+        
+        for sid in source_ids:
+            try:
+                source_instance = Source.objects.get(id=sid)
+                SystemState.objects.update_or_create(
+                    source=source_instance, 
+                    name=SYSTEM_STATE_NAME_ECMWF,
+                    defaults={'last_update': aware_date}
+                )
+                self.stdout.write(self.style.SUCCESS(f"Updated SystemState for {source_instance.name} (ID: {sid})"))
+            except Source.DoesNotExist:
+                self.stdout.write(self.style.WARNING(f"Source ID {sid} not found in database. Skipping..."))
+
     def main(self, date_str):
-        forecast_date = dt.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d')
+        forecast_date = dt.strptime(date_str, '%Y%m%d').strftime('%Y-%m-%d') 
         
         try:
-            source_obj = Source.objects.get(name='ECMWF_HRES', source_type="basin_specific")
+            source_obj = Source.objects.get(pk=4)
         except Source.DoesNotExist:
-            self.stdout.write(self.style.ERROR("ECMWF_HRES source not found in database."))
+            source_obj = Source.objects.filter(name='ECMWF_HRES_VIS', source_type="vis").first()
+
+        if not source_obj:
+            self.stdout.write(self.style.ERROR("Source 'ECMWF_HRES_VIS' metadata not found."))
             return
 
-        nc_loc = os.path.join(BMDWRF_BASE_URL, source_obj.source_path.lstrip('/'), date_str, 'tp.nc')
-
+        nc_dir = source_obj.source_path
+        nc_loc = os.path.join(ECMWF_BASE_URL, nc_dir.strip('/'), date_str, 'tp.nc')
+        
         if not os.path.exists(nc_loc):
-            self.stdout.write(self.style.ERROR(f"File not found: {nc_loc}"))
+            self.stdout.write(self.style.ERROR(f"Error: NC file not found at {nc_loc}"))
             return
 
-        with nco(nc_loc, 'r') as ncf:
-            basins = BasinDetails.objects.all()
-            for basin in basins:
-                shp_path = os.path.join(BMDWRF_BASE_URL, basin.shape_file_path.lstrip('/'))
-                if os.path.exists(shp_path):
-                    self.gen_upazila_forecast(forecast_date, source_obj, ncf, shp_path, basin)
-            
-            # Final state update
-            SystemState.objects.update_or_create(
-                source=source_obj, name=SYSTEM_STATE_NAME_ECMWF_HRES,
-                defaults={'last_update': forecast_date}
-            )
-            self.stdout.write(self.style.SUCCESS(f"🏁 Successfully processed run date: {forecast_date}"))
+        ncf = nco(nc_loc, 'r')
+        basin_list = BasinDetails.objects.all()
+
+        for basin in basin_list:
+            if basin.shape_file_path:
+                file_path = os.path.join(ECMWF_BASE_URL, basin.shape_file_path.strip('/'))
+                if os.path.exists(file_path):
+                    self.gen_upazila_forecast(forecast_date, source_obj, ncf, file_path, basin)
+
+        self.update_state(forecast_date, [2, 4])
+        ncf.close()

@@ -36,19 +36,35 @@ class Command(BaseCommand):
         os.makedirs(OUTPUT_ROOT, exist_ok=True)
         
         CLIMO_PATH = os.path.join(settings.BASE_DIR, 'climatology_data', 'rainfallClimatology.nc')
-        source_obj = Source.objects.get(name='BMDWRF_HRES_VIS', source_type="vis")
+        
+        try:
+            source_obj = Source.objects.get(name='BMDWRF_HRES_VIS', source_type="vis")
+        except Source.DoesNotExist:
+            self.stdout.write(self.style.ERROR("❌ Source config metadata for 'BMDWRF_HRES_VIS' missing from database records."))
+            return
+            
         WRF_NC_FILE = os.path.join(settings.BASE_DIR, source_obj.source_path.strip('/'), f'wrf_out_{fdate}00.nc')
 
         if not os.path.exists(WRF_NC_FILE):
             self.stdout.write(self.style.ERROR(f"WRF File not found: {WRF_NC_FILE}"))
             return
 
-        # Calculation
+        # Load datasets
         ds_climo = xr.open_dataset(CLIMO_PATH)
         ds_wrf = xr.open_dataset(WRF_NC_FILE)
-        if 'lev' in ds_wrf.dims: ds_wrf = ds_wrf.squeeze('lev')
+        
+        # Multi-level dimension checks to squeeze numerical spatial coordinates safely
+        if 'lev' in ds_wrf.dims: 
+            ds_wrf = ds_wrf.squeeze('lev')
+        if 'bottom_top' in ds_wrf.dims:
+            ds_wrf = ds_wrf.squeeze('bottom_top')
         
         wrf_acc = (ds_wrf['rainc'] + ds_wrf['rainnc'])
+        
+        # Guard against nested single-element coordinate arrays (e.g., extra time or level indices)
+        if 'bnds' in wrf_acc.dims or len(wrf_acc.shape) > 3:
+            wrf_acc = wrf_acc.isel(bnds=0, drop=True) if 'bnds' in wrf_acc.dims else wrf_acc.squeeze()
+
         ds_climo_cropped = ds_climo.sel(
             lat=slice(ds_wrf.lat.max().item() + 0.1, ds_wrf.lat.min().item() - 0.1),
             lon=slice(ds_wrf.lon.min().item() - 0.1, ds_wrf.lon.max().item() + 0.1)
@@ -67,6 +83,9 @@ class Command(BaseCommand):
                 anomaly_cubes.append((daily_regridded - climo_slice).expand_dims(time=[t_start]))
 
         # Save NetCDF
-        full_nc_path = os.path.join(OUTPUT_ROOT, f'bmd_rainfall_anomaly_{fdate}.nc')
-        xr.concat(anomaly_cubes, dim='time').to_dataset(name='rainfall_anomaly').to_netcdf(full_nc_path)
-        self.stdout.write(self.style.SUCCESS(f"✅ NetCDF Created: {full_nc_path}"))
+        if anomaly_cubes:
+            full_nc_path = os.path.join(OUTPUT_ROOT, f'bmd_rainfall_anomaly_{fdate}.nc')
+            xr.concat(anomaly_cubes, dim='time').to_dataset(name='rainfall_anomaly').to_netcdf(full_nc_path)
+            self.stdout.write(self.style.SUCCESS(f"✅ NetCDF Created: {full_nc_path}"))
+        else:
+            self.stdout.write(self.style.ERROR("❌ Processing failed: No complete 24-hour steps found in netCDF time array."))

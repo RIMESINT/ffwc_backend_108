@@ -5,26 +5,45 @@ from datetime import datetime, timedelta
 from django.core.management.base import BaseCommand
 
 class Command(BaseCommand):
-    help = 'Downloads ECMWF Ensemble folder (tries today, then yesterday)'
+    help = 'Downloads ECMWF Ensemble folder with argument processing and step-down fallbacks'
 
-    def handle(self, *args, **options):
+    def add_arguments(self, parser):
+        # 1. Positional argument support for manual CLI/cron executions
+        parser.add_argument('fdate', nargs='?', type=str, help='Date for forecast folder in format YYYYMMDD or YYYY-MM-DD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
+
+    def handle(self, *args, **kwargs):
         # 1. Setup Configuration
         source_host = "203.156.108.110"
         source_user = "nazmul"
         source_pass = "rootbeer77"
         
-        # Remote path: /home/nazmul/ifs_6h/ifs_processed/YYYYMMDD
         remote_root = "/home/nazmul/ifs_6h/ifs_processed/"
         local_root = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ecmwf_ens_data/"
 
-        # 2. Define dates to check (Today, then Yesterday)
-        today = datetime.now()
-        yesterday = today - timedelta(days=1)
-        
-        # Format folders as YYYYMMDD based on your path example /20260401
+        # 2. Intercept and Normalize Incoming Target Date
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        if raw_date:
+            clean_date_str = raw_date.replace('-', '')
+            try:
+                target_date = datetime.strptime(clean_date_str, "%Y%m%d")
+                self.stdout.write(self.style.SUCCESS(f"Target date initialized: {target_date.strftime('%Y-%m-%d')}"))
+            except ValueError:
+                self.stdout.write(self.style.ERROR(f"Invalid date format received ({raw_date}). Defaulting to current system time."))
+                target_date = datetime.now()
+        else:
+            target_date = datetime.now()
+            self.stdout.write(self.style.NOTICE(f"No date provided. Defaulting to system time: {target_date.strftime('%Y-%m-%d')}"))
+
+        # 3. Define Fallback Chronological Folders Search Sequence (Target Date, then Day Before)
+        yesterday_fallback = target_date - timedelta(days=1)
         folders_to_check = [
-            today.strftime("%Y%m%d"), 
-            yesterday.strftime("%Y%m%d")
+            target_date.strftime("%Y%m%d"), 
+            yesterday_fallback.strftime("%Y%m%d")
         ]
 
         ssh = paramiko.SSHClient()
@@ -48,7 +67,7 @@ class Command(BaseCommand):
                     remote_files = sftp.listdir(remote_dir)
                     
                     if not remote_files:
-                        self.stdout.write(self.style.WARNING(f"Folder {date_folder} is empty on remote."))
+                        self.stdout.write(self.style.WARNING(f"Folder {date_folder} is empty on remote server."))
                         continue
 
                     # Create local folder if it doesn't exist
@@ -64,7 +83,7 @@ class Command(BaseCommand):
                         local_file_path = os.path.join(local_dir, filename)
 
                         if os.path.exists(local_file_path):
-                            self.stdout.write(f"  - {filename} already exists. Skipping.")
+                            self.stdout.write(f"  - {filename} already exists locally. Skipping.")
                             continue
 
                         self.stdout.write(f"  - Downloading {filename}...")
@@ -72,10 +91,10 @@ class Command(BaseCommand):
 
                     self.stdout.write(self.style.SUCCESS(f"Successfully synced folder {date_folder}"))
                     success = True
-                    break # Stop if we found and processed a folder
+                    break # Stop looping if we successfully found and downloaded data files
 
                 except (FileNotFoundError, IOError):
-                    self.stdout.write(self.style.WARNING(f"Folder {date_folder} not found on remote server."))
+                    self.stdout.write(self.style.WARNING(f"Folder {date_folder} not found on remote server. Stepping down to fallback candidate..."))
 
             if not success:
                 self.stdout.write(self.style.ERROR("No ensemble data found for the checked dates."))
@@ -84,4 +103,4 @@ class Command(BaseCommand):
             ssh.close()
 
         except Exception as e:
-            self.stderr.write(self.style.ERROR(f"Connection error: {str(e)}"))
+            self.stderr.write(self.style.ERROR(f"Connection error during secure directory synchronization: {str(e)}"))

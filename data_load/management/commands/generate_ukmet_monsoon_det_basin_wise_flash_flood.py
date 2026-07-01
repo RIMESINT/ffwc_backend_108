@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import os
 import math
 import numpy as np
@@ -8,7 +9,7 @@ import warnings
 from datetime import datetime, timedelta
 
 from django.conf import settings
-from django.core.management import BaseCommand
+from django.core.management.base import BaseCommand
 from django.utils import timezone
 
 from data_load.models import UKMetMonsoonBasinWiseFlashFloodForecast
@@ -45,13 +46,24 @@ class Command(BaseCommand):
     help = 'Generates UKMet Deterministic Monsoon Flash Flood Forecasts with Day-0 Recovery.'
 
     def add_arguments(self, parser):
-        parser.add_argument('date', nargs='?', type=str, help='Forecast date (YYYY-MM-DD)')
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast date (YYYYMMDD format)')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Explicit argument flag injected by dashboard panel')
 
     def handle(self, *args, **kwargs):
-        date_input = kwargs.get('date') or datetime.now().strftime('%Y-%m-%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        date_input = raw_date or datetime.now().strftime('%Y-%m-%d')
+        
+        # Standardize formatting to YYYY-MM-DD layout standard safely
         if "-" not in date_input:
-            try: date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
-            except: pass
+            try: 
+                date_input = datetime.strptime(date_input, '%Y%m%d').strftime('%Y-%m-%d')
+            except: 
+                pass
 
         if not self.run_forecast_for_date(date_input):
             yesterday = (datetime.strptime(date_input, '%Y-%m-%d') - timedelta(days=1)).strftime('%Y-%m-%d')
@@ -60,7 +72,7 @@ class Command(BaseCommand):
 
     def get_daily_forecast_rainfall(self, station_gdf, station_name, given_date):
         date_str_nodash = given_date.replace('-', '')
-        forecast_file = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_det_data/precip_{date_str_nodash}.nc"
+        forecast_file = os.path.join(settings.BASE_DIR, "forecast", "ukmet_det_data", f"precip_{date_str_nodash}.nc")
         
         if not os.path.exists(forecast_file): return {}
         run_date_obj = datetime.strptime(given_date, '%Y-%m-%d').date()
@@ -82,14 +94,14 @@ class Command(BaseCommand):
                 target_var = 'tp' if 'tp' in clipped.data_vars else list(clipped.data_vars)[0]
                 data_array = clipped[target_var]
                 
-                # Unit check: inspection showed mm
+                # Unit check: conversion from meters to millimeters if required
                 if ds[target_var].attrs.get('units') == 'm':
                     data_array = data_array * 1000
 
                 daily_rainfall = {}
                 weights = np.cos(np.deg2rad(data_array.y))
                 
-                # 3. DAY-0 RECOVERY LOGIC (Aligning with Inspection)
+                # 3. Day-0 Recovery Execution Logic
                 for idx, ts in enumerate(list(data_array.indexes['time'])):
                     mean_val = data_array.isel(time=idx).weighted(weights).mean(dim=['x', 'y']).item()
                     
@@ -153,7 +165,7 @@ class Command(BaseCommand):
             obs_data = self.get_observed_rainfall(station_gdf, date_input)
             combined = {**obs_data, **forecast_data}
             
-            # Use Pandas for easier rolling window calculations
+            # Use Pandas for rolling window calculations
             combined_norm = {pd.to_datetime(k).normalize(): v for k, v in combined.items()}
             forecast_start = pd.to_datetime(date_input).normalize()
             process_dates = [forecast_start + timedelta(days=i) for i in range(10)]

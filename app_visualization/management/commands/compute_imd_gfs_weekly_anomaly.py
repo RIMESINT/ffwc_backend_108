@@ -10,11 +10,25 @@ class Command(BaseCommand):
     help = 'Compute 7-Day Weekly Anomaly for IMD-GFS'
 
     def add_arguments(self, parser):
-        parser.add_argument('fdate', nargs='?', type=str)
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Date in format YYYYMMDD')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **kwargs):
-        fdate_input = kwargs['fdate'] or dt.now().strftime('%Y%m%d')
-        date_obj = dt.strptime(fdate_input, '%Y%m%d')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        fdate_input = raw_date or dt.now().strftime('%Y%m%d')
+        if "-" in fdate_input:
+            fdate_input = fdate_input.replace('-', '')
+
+        try:
+            date_obj = dt.strptime(fdate_input, '%Y%m%d')
+        except ValueError:
+            self.stdout.write(self.style.ERROR(f"Invalid date format: {fdate_input}. Use YYYYMMDD"))
+            return
         
         IMD_NC_FILE = None
         for i in range(2):
@@ -24,7 +38,9 @@ class Command(BaseCommand):
                 IMD_NC_FILE = temp_path
                 break
         
-        if not IMD_NC_FILE: return
+        if not IMD_NC_FILE: 
+            self.stdout.write(self.style.WARNING(f"⚠️ No IMD-GFS file found for {fdate_input} or yesterday."))
+            return
 
         OUTPUT_ROOT = os.path.join(settings.BASE_DIR, 'assets', 'rainfall-anomaly', fdate_input, 'IMD-GFS')
         os.makedirs(OUTPUT_ROOT, exist_ok=True)

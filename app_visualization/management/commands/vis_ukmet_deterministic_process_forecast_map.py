@@ -22,7 +22,10 @@ class Command(BaseCommand):
     help = 'Generate geojson maps and legends for UKMET (Exact BMD-WRF Style)'
 
     def add_arguments(self, parser):
-        parser.add_argument('--date', type=str, help='Target date (YYYY-MM-DD or YYYYMMDD)')
+        # 1. Positional argument support for manual CLI cron execution tasks
+        parser.add_argument('fdate', nargs='?', type=str, help='Target date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Target date from Django UI picker (YYYY-MM-DD)')
 
     def update_state(self, forecast_date, source_obj):
         aware_date = timezone.make_aware(forecast_date) if timezone.is_naive(forecast_date) else forecast_date
@@ -33,21 +36,18 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **kwargs):
-        # 1. Parse the incoming date flag
-        date_input = kwargs.get('date')
+        ui_date = kwargs.get('date')
+        positional_date = kwargs.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
         
-        if not date_input:
+        if not raw_date:
             fdate = dt.now().strftime('%Y%m%d')
         else:
+            fdate = raw_date.replace('-', '')
             try:
-                if "-" in date_input:
-                    parsed_date = dt.strptime(date_input, "%Y-%m-%d")
-                    fdate = parsed_date.strftime("%Y%m%d")
-                else:
-                    dt.strptime(date_input, "%Y%m%d")
-                    fdate = date_input
+                dt.strptime(fdate, "%Y%m%d")
             except ValueError:
-                self.stderr.write(self.style.ERROR(f"Invalid date format: {date_input}. Expected YYYY-MM-DD or YYYYMMDD."))
+                self.stderr.write(self.style.ERROR(f"Invalid date format: {raw_date}. Expected YYYY-MM-DD or YYYYMMDD."))
                 return
         
         try:
@@ -60,8 +60,8 @@ class Command(BaseCommand):
             self.stderr.write(self.style.ERROR(f"Source {SOURCE_NAME} not found: {e}"))
             return
 
-        # Setup Paths
-        ncfile = f"/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_det_data/precip_{fdate}.nc"
+        # Setup Paths dynamically via settings.BASE_DIR
+        ncfile = os.path.join(settings.BASE_DIR, "forecast", "ukmet_det_data", f"precip_{fdate}.nc")
         json_out_rel = source_obj.destination_path
         forecast_out_dir = os.path.join(settings.BASE_DIR, json_out_rel.strip('/'), fdate)
         
@@ -95,9 +95,7 @@ class Command(BaseCommand):
         total_days = len(dates_raw)
         self.stdout.write(f"Found {total_days} map layers to process for UKMET {fdate}...")
 
-        # Processing loop without tqdm, using explicit stdout logging instead
         for day_idx in range(total_days):
-            
             valid_end_dt = dates_raw[day_idx]
             valid_start_dt = valid_end_dt - delt(days=1)
             
@@ -109,14 +107,11 @@ class Command(BaseCommand):
             json_suffix = f'.F_{fdate}.S_{start_f}.E_{end_f}.geojson'
             cmap_suffix = f'.F_{fdate}.S_{start_f}.E_{end_f}.svg'
 
-            # --- Explicit Logging for Dashboard ---
             self.stdout.write(f"[{day_idx + 1}/{total_days}] Generating UKMET layers for period: {start_bst} to {end_bst}")
 
-            # UKMET standalone incremental data
             rf_d = rf_total[day_idx, :, :]
 
             ax = pl.axes()
-            
             rf_cont_plot = pl.contourf(
                 zoom(lon, 4), zoom(lat, 4), zoom(rf_d, 4), 
                 levels=rf_levels, 
@@ -125,7 +120,6 @@ class Command(BaseCommand):
                 extend='max'
             )
             
-            # Save GeoJSON
             rf_geojson = gj.contourf_to_geojson(rf_cont_plot)
             with open(os.path.join(forecast_out_dir, f'rf{json_suffix}'), 'w') as jfw:
                 jfw.write(rf_geojson)
@@ -153,7 +147,6 @@ class Command(BaseCommand):
                 'end'   : end_bst,
             })
 
-            # Confirm step saved
             self.stdout.write(self.style.SUCCESS(f"  ---> Saved outputs: rf{json_suffix} & rf{cmap_suffix}"))
 
         with open(os.path.join(forecast_out_dir, f'info.{fdate}.json'), 'w') as infojw:

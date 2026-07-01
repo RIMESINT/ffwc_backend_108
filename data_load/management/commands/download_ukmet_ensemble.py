@@ -2,35 +2,41 @@ import os
 import paramiko
 from datetime import datetime, timedelta
 from django.core.management.base import BaseCommand
+from django.conf import settings
 
 class Command(BaseCommand):
     help = 'Downloads UKMET ensemble forecast files (EN00-EN17) from remote server'
 
     def add_arguments(self, parser):
-        parser.add_argument('--date', type=str, help='Target date (YYYY-MM-DD or YYYYMMDD)')
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Target date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Target date from Django UI in YYYY-MM-DD format')
 
     def handle(self, *args, **options):
-        # 1. Determine Date
-        date_input = options['date']
-        if not date_input:
-            dt_obj = datetime.today() - timedelta(days=0)
-        else:
-            try:
-                if "-" in date_input:
-                    dt_obj = datetime.strptime(date_input, "%Y-%m-%d")
-                else:
-                    dt_obj = datetime.strptime(date_input, "%Y%m%d")
-            except ValueError:
-                self.stderr.write(self.style.ERROR(f"Invalid date format: {date_input}"))
-                return
+        ui_date = options.get('date')
+        positional_date = options.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
 
-        # 
+        # 1. Determine Date and Sanitize
+        if raw_date:
+            fdate_input = raw_date.replace('-', '')
+            try:
+                dt_obj = datetime.strptime(fdate_input, "%Y%m%d")
+            except ValueError:
+                self.stderr.write(self.style.ERROR(f"Invalid date format: {raw_date}"))
+                return
+        else:
+            dt_obj = datetime.today()
+            fdate_input = dt_obj.strftime('%Y%m%d')
+
+        # 2. Configuration
         source_host = "203.156.108.110"
         source_user = "nazmul"
         source_pass = "rootbeer77"  
         
-        # Local destination
-        local_base_dir = "/home/rimes/ffwc-rebase/backend/ffwc_django_project/forecast/ukmet_ens_data/"
+        # Local base directory optimized using settings.BASE_DIR
+        local_base_dir = os.path.join(settings.BASE_DIR, "forecast", "ukmet_ens_data")
         
         # Try target date, then fallback to yesterday
         dates_to_check = [dt_obj, dt_obj - timedelta(days=1)]

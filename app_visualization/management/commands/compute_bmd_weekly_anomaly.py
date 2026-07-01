@@ -5,6 +5,7 @@ import pandas as pd
 from datetime import datetime as dt, timedelta
 from django.core.management.base import BaseCommand
 from django.conf import settings
+from app_visualization.models import Source
 
 class Command(BaseCommand):
     help = 'Robust 7-Day Weekly Anomaly for BMD-WRF with 1-day fallback'
@@ -30,16 +31,27 @@ class Command(BaseCommand):
             fdate_input = dt.now().strftime('%Y%m%d')
             self.stdout.write(self.style.NOTICE(f"###### No runtime date parameter detected. Defaulting to system time: {fdate_input}"))
 
-        date_obj = dt.strptime(fdate_input, '%Y%m%d')
+        try:
+            date_obj = dt.strptime(fdate_input, '%Y%m%d')
+        except ValueError:
+            self.stdout.write(self.style.ERROR(f"Invalid date format: {fdate_input}. Use YYYYMMDD"))
+            return
         
         # --- Fallback Logic ---
+        try:
+            source_obj = Source.objects.get(name='BMDWRF_HRES_VIS', source_type="vis")
+            source_dir = source_obj.source_path.strip('/')
+        except Source.DoesNotExist:
+            self.stdout.write(self.style.WARNING("⚠️ Source config for 'BMDWRF_HRES_VIS' not found in DB. Falling back to default path layout."))
+            source_dir = os.path.join('forecast', 'bmd_wrf')
+
         WRF_NC_FILE = None
-        current_attempt_date = date_obj
+        actual_fdate = fdate_input
         
         # Check Today, then check Yesterday
         for i in range(2):
-            check_date = (current_attempt_date - timedelta(days=i)).strftime('%Y%m%d')
-            temp_path = os.path.join(settings.BASE_DIR, 'forecast', 'bmd_wrf', f'wrf_out_{check_date}00.nc')
+            check_date = (date_obj - timedelta(days=i)).strftime('%Y%m%d')
+            temp_path = os.path.join(settings.BASE_DIR, source_dir, f'wrf_out_{check_date}00.nc')
             if os.path.exists(temp_path):
                 WRF_NC_FILE = temp_path
                 actual_fdate = check_date
@@ -57,15 +69,25 @@ class Command(BaseCommand):
         CLIMO_PATH = os.path.join(settings.BASE_DIR, 'climatology_data', 'rainfallClimatology.nc')
 
         ds_climo = xr.open_dataset(CLIMO_PATH)
-        ds_wrf = xr.open_dataset(WRF_NC_FILE).squeeze()
+        ds_wrf = xr.open_dataset(WRF_NC_FILE)
+        
+        # Squeeze multi-level dimension variations cleanly to isolate coordinate matrices
+        if 'lev' in ds_wrf.dims: 
+            ds_wrf = ds_wrf.squeeze('lev')
+        if 'bottom_top' in ds_wrf.dims:
+            ds_wrf = ds_wrf.squeeze('bottom_top')
+
         wrf_acc = (ds_wrf['rainc'] + ds_wrf['rainnc'])
+        
+        if 'bnds' in wrf_acc.dims or len(wrf_acc.shape) > 3:
+            wrf_acc = wrf_acc.isel(bnds=0, drop=True) if 'bnds' in wrf_acc.dims else wrf_acc.squeeze()
 
         t0 = pd.Timestamp(dt.strptime(actual_fdate, '%Y%m%d'))
         t7 = t0 + timedelta(days=7)
         
         # Verify t7 exists in the NC file before proceeding
         if t7 not in ds_wrf.time.values:
-            self.stdout.write(self.style.ERROR(f" Forecast in {WRF_NC_FILE} does not reach 7 days."))
+            self.stdout.write(self.style.ERROR(f"❌ Forecast in {WRF_NC_FILE} does not reach 7 days. Weekly anomaly requires a 7-day model lead time."))
             return
 
         wrf_weekly_mean = (wrf_acc.sel(time=t7) - wrf_acc.sel(time=t0)) / 7
