@@ -9,287 +9,519 @@ from celery import states
 
 from .tasks import run_crontab_script_async
 
-# Dictionary registry containing only clean, deduplicated production tracking modules
+# Dictionary registry synced explicitly with crontab.conf workflows
 PRODUCTION_PIPELINE_REGISTRY = {
-    # "section_1_housekeeping": {
-    #     "title": "1. Core Observations & Housekeeping",
-    #     "description": "Primary telemetry ingestion scripts and automated filesystem cleaning routines.",
-    #     "tasks": {
-    #         "mswep_download": {
-    #             "name": "Download MSWEP Precipitation Stream",
-    #             "args": [
-    #                 "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
-    #                 "/home/rimes/ffwc-rebase/backend/ffwc_django_project/scripts/downloadMSWEP_daily.py"
-    #             ]
-    #         },
-    #         "delete_old_files": {
-    #             "name": "Delete Old Files and Data Records",
-    #             "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/delete_old_files_and_data.sh"]
-    #         }
-    #     }
-    # },
+    "section_1_housekeeping": {
+        "title": "1. Core Observations & Housekeeping",
+        "description": "Primary telemetry Ingestion scripts and automated filesystem cleaning routines.",
+        "tasks": {
+            "mswep_download": {
+                "name": "Download MSWEP Precipitation Stream",
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/scripts/downloadMSWEP_daily.py"
+                ]
+            },
+            "delete_old_files": {
+                "name": "Delete Old Files and Data Records",
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "delete_old_files_and_data"
+                ]
+            }
+        }
+    },
     "section_2_summaries": {
-        "title": "1. Rainfall & Flood Summaries",
+        "title": "2. Rainfall & Flood Summaries",
         "description": "Visual report compilers and spatial mapping distribution canvas construction routines.",
         "tasks": {
             "rainfall_map_v2": {
-                "name": "Generate Rainfall Distribution Map (V2 Bash)",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_rainfall_distribution_map_v2.sh"]
+                "name": "Generate Rainfall Distribution Map (V2)",
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_rainfall_distribution_map_v2"
+                ]
             },
             "rainfall_map_py": {
                 "name": "Generate Rainfall Distribution Map (Python Core)",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_rainfall_distribution_map"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_rainfall_distribution_map"
+                ]
             },
             "flood_summary": {
                 "name": "Generate Flood Summary Report",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/shell-scripts/generate_flood_summary.sh"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_flood_summary"
+                ]
             }
         }
     },
     "section_3_bmd": {
-        "title": "2. BMD Source Block & Anomalies",
+        "title": "3. BMD Source Block & Anomalies",
         "description": "Bangladesh Meteorological Department high-resolution pipelines and spatial anomalies grids.",
         "tasks": {
             "bmd_download_py": {
                 "name": "Download & Crop BMDWRF HRES Data",
-                "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py download_crop_bmdwrf_hres_data"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "download_crop_bmdwrf_hres_data"
+                ]
             },
             "bmd_monsoon_flash": {
                 "name": "Generate BMDWRF Monsoon Basin Wise Flash Flood",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_bmdwrf_monsoon_basin_wise_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_bmdwrf_monsoon_basin_wise_flash_flood"
+                ]
             },
             "bmd_pre_monsoon_flash": {
                 "name": "Generate BMDWRF Pre-Monsoon Basin Wise Flash Flood",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_bmdwrf_pre_monsoon_basin_wise_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_bmdwrf_pre_monsoon_basin_wise_flash_flood"
+                ]
             },
             "bmd_basin_forecast_py": {
                 "name": "Basin Wise Forecast BMDWRF",
-                "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py basin_wise_forecast_bmdwrf"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "basin_wise_forecast_bmdwrf"
+                ]
             },
             "bmd_vis_map_py": {
                 "name": "Visualize BMD WRF Process Forecast Map",
-                "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py vis_bmd_wrf_process_forecast_map"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "vis_bmd_wrf_process_forecast_map"
+                ]
             },
             "bmd_anomaly_base": {
                 "name": "Compute BMD Forecasting Spatial Anomalies Matrix",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "compute_bmd_anomaly"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "compute_bmd_anomaly"
+                ]
             },
             "bmd_anomaly_rasters": {
                 "name": "Generate BMD Spatial Anomaly Mapping Rasters",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_bmd_anomaly_rasters"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_bmd_anomaly_rasters"
+                ]
             },
             "bmd_weekly_anomaly": {
                 "name": "Compute BMD Long-Range Weekly Running Anomalies",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "compute_bmd_weekly_anomaly"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "compute_bmd_weekly_anomaly"
+                ]
             },
             "bmd_weekly_rasters": {
                 "name": "Generate BMD Weekly Raster Data Format Canvas Maps",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_bmd_weekly_rasters"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_bmd_weekly_rasters"
+                ]
             }
         }
     },
     "section_4_ukmet": {
-        "title": "3. UKMET Source Block & Anomalies",
+        "title": "4. UKMET Source Block & Anomalies",
         "description": "United Kingdom Meteorological Office data collection streams and anomaly projection canvas algorithms.",
         "tasks": {
             "ukmet_download_det": {
                 "name": "Download UKMET Deterministic Forecast Model Data",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "download_ukmet_det_forecast"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "download_ukmet_det_forecast"
+                ]
             },
             "ukmet_download_ens": {
                 "name": "Download UKMET Probabilistic Ensemble Datasets",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "download_ukmet_ensemble"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "download_ukmet_ensemble"
+                ]
             },
             "ukmet_monsoon_det": {
                 "name": "Generate UKMET Monsoon Deterministic Basin Wise Flash Flood",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ukmet_monsoon_det_basin_wise_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ukmet_monsoon_det_basin_wise_flash_flood"
+                ]
             },
             "ukmet_pre_monsoon_det": {
                 "name": "Generate UKMET Pre-Monsoon Deterministic Basin Wise Flash Flood",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ukmet_pre_monsoon_det_basin_wise_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ukmet_pre_monsoon_det_basin_wise_flash_flood"
+                ]
             },
             "ukmet_monsoon_prob": {
                 "name": "Generate UKMET Monsoon Probabilistic Flash Flood Projections",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ukmet_monsoon_probabilistic_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ukmet_monsoon_probabilistic_flash_flood"
+                ]
             },
             "ukmet_pre_monsoon_prob": {
                 "name": "Generate UKMET Pre-Monsoon Probabilistic Flash Flood Projections",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ukmet_pre_monsoon_probabilistic_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ukmet_pre_monsoon_probabilistic_flash_flood"
+                ]
             },
             "ukmet_vis_map_py": {
                 "name": "Visualize UKMET Deterministic Process Forecast Map",
-                "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py vis_ukmet_deterministic_process_forecast_map"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "vis_ukmet_deterministic_process_forecast_map"
+                ]
             },
             "ukmet_basin_forecast_py": {
                 "name": "Basin Wise Forecast UKMET Deterministic",
-                "args": ["bash", "-lc", "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3 /home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py basin_wise_forecast_ukmet_deterministic"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "basin_wise_forecast_ukmet_deterministic"
+                ]
             },
             "ukmet_anomaly_base": {
                 "name": "Compute UKMET Forecasting Spatial Anomaly Arrays",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "compute_ukmet_anomaly"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "compute_ukmet_anomaly"
+                ]
             },
             "ukmet_anomaly_rasters": {
                 "name": "Generate UKMET Spatial Anomaly Mapping Rasters",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ukmet_anomaly_rasters"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ukmet_anomaly_rasters"
+                ]
             },
             "ukmet_weekly_anomaly": {
                 "name": "Compute UKMET Aggregated Weekly Running Trend Anomalies",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "compute_ukmet_weekly_anomaly"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "compute_ukmet_weekly_anomaly"
+                ]
             },
             "ukmet_weekly_rasters": {
                 "name": "Generate UKMET Weekly Running Trend Raster Data Formats",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ukmet_weekly_rasters"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ukmet_weekly_rasters"
+                ]
             }
         }
     },
     "section_5_ecmwf": {
-        "title": "4. ECMWF Source Block & Anomalies",
+        "title": "5. ECMWF Source Block & Anomalies",
         "description": "European Centre for Medium-Range Weather Forecasts high-precision resolution models.",
         "tasks": {
             "ecmwf_download_01": {
                 "name": "Download ECMWF 0.1 High Resolution Core Forecast Grid",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "download_ecmwf_0_1_forecast"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "download_ecmwf_0_1_forecast"
+                ]
             },
             "ecmwf_download_02": {
                 "name": "Download ECMWF 0.2 Standard Resolution Core Forecast Grid",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "download_ecmwf_0_2_forecast"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "download_ecmwf_0_2_forecast"
+                ]
             },
             "ecmwf_download_ens": {
                 "name": "Download ECMWF Core Probabilistic Ensemble Grids Data",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "download_ecmwf_ens_forecast"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "download_ecmwf_ens_forecast"
+                ]
             },
             "ecmwf_monsoon_basin_flash": {
                 "name": "Generate ECMWF 0.2 Monsoon Basin Wise Flash Flood Predictions",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ecmwf_0_2_monsoon_basin_wise_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ecmwf_0_2_monsoon_basin_wise_flash_flood"
+                ]
             },
             "ecmwf_pre_monsoon_basin_flash": {
                 "name": "Generate ECMWF 0.2 Pre-Monsoon Basin Wise Flash Flood Predictions",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ecmwf_0_2_pre_monsoon_basin_wise_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ecmwf_0_2_pre_monsoon_basin_wise_flash_flood"
+                ]
             },
             "ecmwf_monsoon_prob_flash": {
                 "name": "Generate ECMWF Monsoon Probabilistic Basin Flash Flood Projections",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ecmwf_monsoon_probabilistic_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ecmwf_monsoon_probabilistic_flash_flood"
+                ]
             },
             "ecmwf_pre_monsoon_prob_flash": {
                 "name": "Generate ECMWF Pre-Monsoon Probabilistic Basin Flash Flood Projections",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ecmwf_pre_monsoon_probabilistic_flash_flood"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ecmwf_pre_monsoon_probabilistic_flash_flood"
+                ]
             },
             "ecmwf_crop_hres": {
-                "name": "Download & Crop ECMWF HRES Boundary Data (Shell)",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_crop_ecmwf_hres_data.sh"]
+                "name": "Download & Crop ECMWF HRES Boundary Data",
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", 
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", 
+                    "download_crop_ecmwf_hres_data"
+                ]
             },
             "ecmwf_vis_map": {
-                "name": "Visualize ECMWF HRES Dynamic Processing Forecast Maps Grids (Shell)",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_ecmwf_hres_process_forecast_map.sh"]
+                "name": "Visualize ECMWF HRES Dynamic Processing Forecast Maps Grids",
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "vis_ecmwf_hres_process_forecast_map"
+                ]
             },
             "ecmwf_basin_forecast": {
-                "name": "Basin Wise Forecast ECMWF HRES Numerical Calculations Grid (Shell)",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_ecmwf_hres.sh"]
+                "name": "Basin Wise Forecast ECMWF HRES Numerical Calculations Grid",
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "basin_wise_forecast_ecmwf_hres"
+                ]
             },
             "ecmwf_anomaly_base": {
                 "name": "Compute Base ECMWF Matrix Spatial Forecasting Anomalies Trends",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "compute_ecmwf_anomaly"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "compute_ecmwf_anomaly"
+                ]
             },
             "ecmwf_anomaly_rasters": {
                 "name": "Generate ECMWF Matrix Spatial Anomaly Projection Surface Rasters",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ecmwf_anomaly_rasters"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ecmwf_anomaly_rasters"
+                ]
             },
             "ecmwf_weekly_anomaly": {
                 "name": "Compute ECMWF Long-Range Weekly Running Trend Anomalies Data",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "compute_ecmwf_weekly_anomaly"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "compute_ecmwf_weekly_anomaly"
+                ]
             },
             "ecmwf_weekly_rasters": {
                 "name": "Generate ECMWF Weekly Running Trend Spatial Raster Canvas Maps",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ecmwf_weekly_rasters"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_ecmwf_weekly_rasters"
+                ]
             }
         }
     },
     "section_6_imd": {
-        "title": "5. IMD SOURCE BLOCK & ANOMALIES",
+        "title": "6. IMD SOURCE BLOCK & ANOMALIES",
         "description": "India Meteorological Department GFS and WRF boundary tracking model components.",
         "tasks": {
             "imd_gfs_download": {
                 "name": "Download, Convert & Crop IMD GFS Resolution Boundary Data",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_convert_crop_imd_gfs_data.sh"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "download_convert_crop_imd_gfs_data"
+                ]
             },
             "imd_wrf_download": {
                 "name": "Download, Merge & Crop IMD WRF Mesoscale Regional Boundaries Data",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_merge_crop_imd_wrf_data.sh"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "download_merge_crop_imd_wrf_data"
+                ]
             },
             "imd_gfs_vis": {
                 "name": "Visualize IMD GFS Processing Forecast Numerical Matrix Maps",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_imd_gfs_process_forecast_map.sh"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "vis_imd_gfs_process_forecast_map"
+                ]
             },
             "imd_wrf_vis": {
                 "name": "Visualize IMD WRF Processing Forecast Numerical Matrix Maps",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/vis_imd_wrf_process_forecast_map.sh"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "vis_imd_wrf_process_forecast_map"
+                ]
             },
             "imd_gfs_basin": {
                 "name": "Calculate Basin Wise Forecast via IMD GFS Extrapolations Data",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_imd_gfs.sh"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "basin_wise_forecast_imd_gfs"
+                ]
             },
             "imd_wrf_basin": {
                 "name": "Calculate Basin Wise Forecast via IMD WRF Extrapolations Data",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/basin_wise_forecast_imd_wrf.sh"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "basin_wise_forecast_imd_wrf"
+                ]
             },
             "imd_gfs_anomaly_base": {
                 "name": "Compute IMD GFS Grid Forecasting Spatial Anomalies Core",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "compute_imd_gfs_anomaly"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "compute_imd_gfs_anomaly"
+                ]
             },
             "imd_gfs_anomaly_rasters": {
                 "name": "Generate IMD GFS Matrix Spatial Anomaly Projection Rasters Data",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_imd_gfs_anomaly_rasters"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_imd_gfs_anomaly_rasters"
+                ]
             },
             "imd_gfs_weekly_anomaly": {
                 "name": "Compute IMD GFS Aggregated Weekly Running Anomalies Metric",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "compute_imd_gfs_weekly_anomaly"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "compute_imd_gfs_weekly_anomaly"
+                ]
             },
             "imd_gfs_weekly_rasters": {
                 "name": "Generate IMD GFS Weekly Anomaly Mapping Rasters Data Canvas",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_imd_gfs_weekly_rasters"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_imd_gfs_weekly_rasters"
+                ]
             }
         }
     },
     "section_7_station_forecasts": {
-        "title": "6. STATION FORECASTS & SHARED SCRIPTS",
+        "title": "7. STATION FORECASTS & SHARED SCRIPTS",
         "description": "Localized gauge discharge metrics and shared programmatic flash flood forecast computations.",
         "tasks": {
             "forecast_amalshid": {
                 "name": "Generate Forecast: Amalshid Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_amalshid"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_forecast_amalshid"
+                ]
             },
             "forecast_cumilla": {
                 "name": "Generate Forecast: Cumilla Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_cumilla"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_forecast_cumilla"
+                ]
             },
             "forecast_sunamganj": {
                 "name": "Generate Forecast: Sunamganj Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_sunamganj"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_forecast_sunamganj"
+                ]
             },
             "forecast_sylhet": {
                 "name": "Generate Forecast: Sylhet Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_sylhet"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_forecast_sylhet"
+                ]
             },
             "forecast_parshuram": {
                 "name": "Generate Forecast: Parshuram Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_parshuram"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_forecast_parshuram"
+                ]
             },
             "forecast_dalia": {
                 "name": "Generate Forecast: Dalia Station Gauge",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_dalia"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_forecast_dalia"
+                ]
             },
             "forecast_brahmaputra": {
                 "name": "Generate Forecast: Brahmaputra Basin",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_forecast_brahmaputra"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_forecast_brahmaputra"
+                ]
             },
             "forecast_ganges": {
                 "name": "Generate Forecast: Ganges Basin",
-                "args": ["/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3", "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py", "generate_ganges"]
+                "args": [
+                    "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+                    "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+                    "generate_forecast_ganges"
+                ]
             },
-            "streamflow_forecast": {
-                "name": "Download Stream Flow Forecast Data",
-                "args": ["/home/rimes/ffwc-rebase/backend/ffwc_django_project/app_crontab/bash_script/ffwc_108_rebase/app_visualization/download_stream_flow_forecast_data.sh"]
-            }
+            # "streamflow_forecast": {
+            #     "name": "Download Stream Flow Forecast Data",
+            #     "args": [
+            #         "/home/rimes/.pyenv/versions/ffwc_rebase/bin/python3",
+            #         "/home/rimes/ffwc-rebase/backend/ffwc_django_project/manage.py",
+            #         "download_stream_flow_forecast_data"
+            #     ]
+            # }
         }
     }
 }

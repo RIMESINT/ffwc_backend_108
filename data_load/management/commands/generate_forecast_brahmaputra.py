@@ -12,14 +12,50 @@ from django.conf import settings
 
 # Suppress pandas performance warnings
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
+# Suppress paramiko cryptography deprecation warning logs from STDERR
+warnings.filterwarnings("ignore", message=".*TripleDES.*")
 
 class Command(BaseCommand):
-    help = 'Fetch Brahmaputra ensemble forecast and probability data'
+    help = 'Fetch Brahmaputra ensemble forecast and probability data supporting UI inputs with rolling fallback'
+
+    def add_arguments(self, parser):
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast target initialization date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Target date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **options):
-        now = datetime.now()
-        run_datetime = now.strftime('%Y-%m-%d %H:%M:%S')
-        self.stdout.write(f"[{run_datetime}] Starting Brahmaputra forecast update...")
+        # Determine the primary input parameter dynamically across channels
+        ui_date = options.get('date')
+        positional_date = options.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        if not raw_date:
+            base_datetime = datetime.now()
+        else:
+            clean_date_str = raw_date.replace('-', '')
+            try:
+                base_datetime = datetime.strptime(clean_date_str, "%Y%m%d")
+            except ValueError:
+                self.stderr.write(self.style.ERROR(f"Invalid date format received: {raw_date}"))
+                return
+
+        # Explicitly configure fallback paths: Selected Target, then Day-1 Yesterday
+        target_fdate = base_datetime.strftime('%Y%m%d')
+        fallback_fdate = (base_datetime - timedelta(days=1)).strftime('%Y%m%d')
+
+        self.stdout.write(self.style.NOTICE(f"Initializing Brahmaputra Forecast Update Core | Target Window: {target_fdate} | Fallback Day-1: {fallback_fdate}"))
+
+        # Trigger ingestion loop; fall back to yesterday if target folders fail to resolve
+        success = self.execute_ingestion_pipeline(target_fdate)
+        if not success:
+            self.stdout.write(self.style.WARNING(f"⚠️ Data arrays unavailable for target {target_fdate}. Executing historical rolling fallback to: {fallback_fdate}..."))
+            success_fallback = self.execute_ingestion_pipeline(fallback_fdate)
+            if not success_fallback:
+                self.stderr.write(self.style.ERROR(f"❌ Critical Failure: Brahmaputra ensemble data completely missing across both windows."))
+
+    def execute_ingestion_pipeline(self, date_str):
+        run_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         REMOTE_HOST = '203.156.108.111'
         REMOTE_USER = 'mmb'
@@ -37,62 +73,42 @@ class Command(BaseCommand):
         fd2, temp_pb_csv = tempfile.mkstemp(suffix='_brahmaputra_pb.csv')
         os.close(fd1); os.close(fd2)
 
+        sftp_session_active = False
+        ssh_client_active = False
+
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(REMOTE_HOST, username=REMOTE_USER, password=REMOTE_PASS, timeout=30)
+            ssh_client_active = True
+            
             sftp = ssh.open_sftp()
+            sftp_session_active = True
 
-            final_folder = None
-            date_str = None
-
-            # Lookups: Today -> Yesterday -> Fallback Directory Scan
-            today_str = now.strftime('%Y%m%d')
-            yesterday_str = (now - timedelta(days=1)).strftime('%Y%m%d')
+            # Verify target directory presence before initiating merge routines
+            target_folder = f"c.{date_str}"
+            remote_dir_path = f"{ACTIVE_ROOT}{target_folder}/"
             
-            for folder_date in [today_str, yesterday_str]:
-                candidate_folder = f"c.{folder_date}"
-                candidate_path = f"{ACTIVE_ROOT}{candidate_folder}/"
-                try:
-                    sftp.stat(candidate_path)
-                    final_folder = candidate_folder
-                    date_str = folder_date
-                    self.stdout.write(self.style.SUCCESS(f"--> Found active data folder: {candidate_folder}"))
-                    break
-                except IOError:
-                    continue
+            try:
+                sftp.stat(remote_dir_path)
+                self.stdout.write(self.style.SUCCESS(f"--> Found active data folder matching parameters: {target_folder}"))
+            except IOError:
+                sftp.close(); ssh.close()
+                for p in [temp_csv, temp_pb_csv]:
+                    if os.path.exists(p): os.remove(p)
+                return False
 
-            if not final_folder:
-                self.stdout.write(self.style.WARNING("--> Folder not found for today/yesterday. Scanning directory history..."))
-                try:
-                    all_entries = sftp.listdir(ACTIVE_ROOT)
-                    date_folders = sorted([f for f in all_entries if re.match(r'^c\.\d{8}$', f)], reverse=True)
-                    
-                    for folder in date_folders[:3]:
-                        candidate_path = f"{ACTIVE_ROOT}{folder}/"
-                        try:
-                            sftp.stat(candidate_path)
-                            final_folder = folder
-                            date_str = folder.split('.')[-1]
-                            self.stdout.write(self.style.SUCCESS(f"--> Fallback found historical folder: {folder}"))
-                            break
-                        except IOError:
-                            continue
-                except Exception as e:
-                    self.stdout.write(self.style.ERROR(f"--> Could not browse directory root: {e}"))
-
-            if not final_folder:
-                raise Exception(f"No valid c.YYYYMMDD forecast folders found under: {ACTIVE_ROOT}")
-
-            # 4. Download & Merge Multiple Ensemble CSV Files
-            remote_dir_path = f"{ACTIVE_ROOT}{final_folder}/"
+            # Download & Merge Multiple Ensemble CSV Files
             all_files = sftp.listdir(remote_dir_path)
-            
             ensemble_pattern = re.compile(rf'^{date_str}\.corr\.en-\d+\.csv$')
             ensemble_files = [f for f in all_files if ensemble_pattern.match(f)]
             
             if not ensemble_files:
-                raise Exception(f"No ensemble CSV files found matching {date_str}.corr.en-*.csv in {remote_dir_path}")
+                self.stdout.write(self.style.WARNING(f"Directory {target_folder} exists but contains no files matching format requirements."))
+                sftp.close(); ssh.close()
+                for p in [temp_csv, temp_pb_csv]:
+                    if os.path.exists(p): os.remove(p)
+                return False
             
             self.stdout.write(f"--> Found {len(ensemble_files)} ensemble files. Processing and merging...")
 
@@ -127,16 +143,16 @@ class Command(BaseCommand):
             formatted_date = datetime.strptime(date_str, "%Y%m%d").strftime("%Y-%m-%d")
             dates_list = master_df['Time'].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
 
-            # 5. Process Probability File from webdat root path (e.g., 20260621.pb.csv)
+            # Process Probability File from webdat root path (e.g., 20260621.pb.csv)
             pb_dates, pb_values = [], []
             pb_filename = f"{date_str}.pb.csv"
             remote_pb_file = f"{PB_ROOT}{pb_filename}"
 
             try:
+                sftp.stat(remote_pb_file)
                 sftp.get(remote_pb_file, temp_pb_csv)
                 df_pb = pd.read_csv(temp_pb_csv)
                 
-                # Dynamic matching for column names (checking for standard 'ex_pr' or variations)
                 pb_col = 'ex_pr' if 'ex_pr' in df_pb.columns else (df_pb.columns[1] if len(df_pb.columns) > 1 else None)
                 date_col = 'date' if 'date' in df_pb.columns else (df_pb.columns[0] if len(df_pb.columns) > 0 else None)
                 
@@ -154,7 +170,7 @@ class Command(BaseCommand):
 
             sftp.close(); ssh.close()
 
-            # 6. Save Output JSON
+            # Save Output JSON
             output_data = {
                 "code": "success", "message": f"Fetched and combined from {remote_dir_path} and {PB_ROOT}",
                 "metadata": {
@@ -171,10 +187,18 @@ class Command(BaseCommand):
             with open(local_json_path, 'w') as f:
                 json.dump(output_data, f, indent=2)
 
-            self.stdout.write(self.style.SUCCESS(f"DONE: Brahmaputra updated for {formatted_date}."))
+            self.stdout.write(self.style.SUCCESS(f"DONE: Brahmaputra updated successfully for run parameter date: {formatted_date}."))
+            return True
 
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f"FATAL ERROR: {str(e)}"))
+            self.stdout.write(self.style.ERROR(f"Pipeline processing execution error for folder date {date_str}: {str(e)}"))
+            return False
         finally:
+            if sftp_session_active:
+                try: sftp.close()
+                except: pass
+            if ssh_client_active:
+                try: ssh.close()
+                except: pass
             for p in [temp_csv, temp_pb_csv]:
                 if os.path.exists(p): os.remove(p)

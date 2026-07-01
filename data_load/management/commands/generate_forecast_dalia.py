@@ -12,15 +12,50 @@ from django.conf import settings
 
 # Suppress pandas performance warnings
 warnings.simplefilter(action='ignore', category=pd.errors.PerformanceWarning)
+# Suppress paramiko cryptography deprecation warning logs from STDERR
+warnings.filterwarnings("ignore", message=".*TripleDES.*")
 
 class Command(BaseCommand):
-    help = 'Fetch Dalia ensemble forecast from the corrected Teesta auto path'
+    help = 'Fetch Dalia ensemble forecast supporting manual UI date parameters with historical rollback'
+
+    def add_arguments(self, parser):
+        # 1. Positional argument support for direct console execution and crontab macros
+        parser.add_argument('fdate', nargs='?', type=str, help='Forecast target initialization date in YYYYMMDD format')
+        # 2. Keyed option flag mapping to support date-picker from Django Dashboard UI
+        parser.add_argument('--date', type=str, help='Target date from Django UI picker in format YYYY-MM-DD')
 
     def handle(self, *args, **options):
-        # 1. Setup
-        now = datetime.now()
-        run_datetime = now.strftime('%Y-%m-%d %H:%M:%S')
-        self.stdout.write(f"[{run_datetime}] Starting Dalia forecast update...")
+        # Capture parameter inputs across standard option channels
+        ui_date = options.get('date')
+        positional_date = options.get('fdate')
+        raw_date = ui_date if ui_date else positional_date
+
+        if not raw_date:
+            base_datetime = datetime.now()
+        else:
+            clean_date_str = raw_date.replace('-', '')
+            try:
+                base_datetime = datetime.strptime(clean_date_str, "%Y%m%d")
+            except ValueError:
+                self.stderr.write(self.style.ERROR(f"Invalid date format received: {raw_date}"))
+                return
+
+        # Explicitly configure recursive step windows: Selected Target, then Day-1 Yesterday
+        target_fdate = base_datetime.strftime('%Y%m%d')
+        fallback_fdate = (base_datetime - timedelta(days=1)).strftime('%Y%m%d')
+
+        self.stdout.write(self.style.NOTICE(f"Initializing Dalia Forecast Update Core | Target Window: {target_fdate} | Fallback Day-1: {fallback_fdate}"))
+
+        # Trigger ingestion sequence; fall back automatically if the target folder is empty
+        success = self.execute_ingestion_pipeline(target_fdate)
+        if not success:
+            self.stdout.write(self.style.WARNING(f"⚠️ Data arrays unavailable for target {target_fdate}. Executing historical rolling fallback to: {fallback_fdate}..."))
+            success_fallback = self.execute_ingestion_pipeline(fallback_fdate)
+            if not success_fallback:
+                self.stderr.write(self.style.ERROR(f"❌ Critical Failure: Dalia ensemble data missing across both primary and fallback options."))
+
+    def execute_ingestion_pipeline(self, date_folder_str):
+        run_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
         REMOTE_HOST = '203.156.108.111'
         REMOTE_USER = 'mmb'
@@ -34,65 +69,44 @@ class Command(BaseCommand):
         os.makedirs(base_assets, exist_ok=True)
         local_json_path = os.path.join(base_assets, 'latest_dalia_forecast.json')
 
+        # Use safe temporary files for background download pipelines
         fd1, temp_csv = tempfile.mkstemp(suffix='_dalia_main.csv')
         fd2, temp_pb_csv = tempfile.mkstemp(suffix='_dalia_pb.csv')
         os.close(fd1); os.close(fd2)
+
+        sftp_session_active = False
+        ssh_client_active = False
 
         try:
             ssh = paramiko.SSHClient()
             ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
             ssh.connect(REMOTE_HOST, username=REMOTE_USER, password=REMOTE_PASS, timeout=30)
-            sftp = ssh.open_sftp()
-
-            remote_file_path = None
-            final_date_folder = None
-
-            # --- Try Directory Lookups (Today -> Yesterday -> Fallback Scan) ---
-            today_str = now.strftime('%Y%m%d')
-            yesterday_str = (now - timedelta(days=1)).strftime('%Y%m%d')
+            ssh_client_active = True
             
-            for folder in [today_str, yesterday_str]:
-                candidate = f"{ACTIVE_ROOT}{folder}/{TARGET_FILE}"
-                try:
-                    sftp.stat(candidate)
-                    remote_file_path = candidate
-                    final_date_folder = folder
-                    self.stdout.write(self.style.SUCCESS(f"--> Found active data folder: {folder}"))
-                    break
-                except IOError:
-                    continue
+            sftp = ssh.open_sftp()
+            sftp_session_active = True
 
-            # Dynamic Fallback: if today/yesterday aren't generated yet, find the most recent folder dynamically
-            if not remote_file_path:
-                self.stdout.write(self.style.WARNING("--> File not found for today/yesterday. Scanning directory history..."))
-                try:
-                    all_entries = sftp.listdir(ACTIVE_ROOT)
-                    date_folders = sorted([f for f in all_entries if re.match(r'^\d{8}$', f)], reverse=True)
-                    
-                    for folder in date_folders[:3]:
-                        candidate = f"{ACTIVE_ROOT}{folder}/{TARGET_FILE}"
-                        try:
-                            sftp.stat(candidate)
-                            remote_file_path = candidate
-                            final_date_folder = folder
-                            self.stdout.write(self.style.SUCCESS(f"--> Fallback found historical folder: {folder}"))
-                            break
-                        except IOError:
-                            continue
-                except Exception as e:
-                    self.stdout.write(self.style.ERROR(f"--> Could not browse directory root: {e}"))
+            remote_file_path = f"{ACTIVE_ROOT}{date_folder_str}/{TARGET_FILE}"
+            
+            # Verify file exists on remote server path for the designated folder parameter
+            try:
+                sftp.stat(remote_file_path)
+                self.stdout.write(self.style.SUCCESS(f"--> Found active data folder matching parameters: {date_folder_str}"))
+            except IOError:
+                # If path doesn't exist, terminate session safely and report back to handle() fallback loop
+                sftp.close(); ssh.close()
+                for p in [temp_csv, temp_pb_csv]:
+                    if os.path.exists(p): os.remove(p)
+                return False
 
-            if not remote_file_path:
-                raise Exception(f"Target file '{TARGET_FILE}' completely missing from paths under: {ACTIVE_ROOT}")
-
-            # 4. Download & Process Main CSV
+            # Download & Process Main CSV
             sftp.get(remote_file_path, temp_csv)
             df = pd.read_csv(temp_csv)
             time_col = 'Time' if 'Time' in df.columns else 'Date'
             df[time_col] = pd.to_datetime(df[time_col]).dt.tz_localize(None)
 
             # Slicing from forecast date onward
-            f_start = pd.to_datetime(final_date_folder, format='%Y%m%d')
+            f_start = pd.to_datetime(date_folder_str, format='%Y%m%d')
             df = df[df[time_col] >= f_start].copy()
 
             ensemble_cols = [col for col in df.columns if col.startswith('EN#')]
@@ -102,15 +116,16 @@ class Command(BaseCommand):
             p75 = df[ensemble_cols].quantile(0.75, axis=1).round(3).tolist()
             p95 = df[ensemble_cols].quantile(0.95, axis=1).round(3).tolist()
 
-            formatted_date = datetime.strptime(final_date_folder, "%Y%m%d").strftime("%Y-%m-%d")
+            formatted_date = datetime.strptime(date_folder_str, "%Y%m%d").strftime("%Y-%m-%d")
             dates_list = df[time_col].dt.strftime('%Y-%m-%d %H:%M:%S').tolist()
 
-            # 5. Download & Process Probability File (data_pb)
+            # Download & Process Probability File (data_pb)
             pb_dates, pb_values = [], []
-            pb_name = f"exceedence{final_date_folder}.csv"
-            remote_pb_file = f"{ACTIVE_ROOT}{final_date_folder}/{pb_name}"
+            pb_name = f"exceedence{date_folder_str}.csv"
+            remote_pb_file = f"{ACTIVE_ROOT}{date_folder_str}/{pb_name}"
 
             try:
+                sftp.stat(remote_pb_file)
                 sftp.get(remote_pb_file, temp_pb_csv)
                 df_pb = pd.read_csv(temp_pb_csv)
                 if 'ex_pr' in df_pb.columns:
@@ -122,7 +137,7 @@ class Command(BaseCommand):
 
             sftp.close(); ssh.close()
 
-            # 6. Save Formatted JSON Output
+            # Save Formatted JSON Output
             output_data = {
                 "code": "success", "message": f"Fetched from {ACTIVE_ROOT}",
                 "metadata": {
@@ -139,10 +154,18 @@ class Command(BaseCommand):
             with open(local_json_path, 'w') as f:
                 json.dump(output_data, f, indent=2)
 
-            self.stdout.write(self.style.SUCCESS(f"DONE: Dalia updated for {formatted_date}."))
+            self.stdout.write(self.style.SUCCESS(f"DONE: Dalia updated successfully for run parameter date: {formatted_date}."))
+            return True
 
         except Exception as e:
-            self.stdout.write(self.style.ERROR(f"FATAL ERROR: {str(e)}"))
+            self.stdout.write(self.style.ERROR(f"Pipeline processing execution error for folder date {date_folder_str}: {str(e)}"))
+            return False
         finally:
+            if sftp_session_active:
+                try: sftp.close()
+                except: pass
+            if ssh_client_active:
+                try: ssh.close()
+                except: pass
             for p in [temp_csv, temp_pb_csv]:
                 if os.path.exists(p): os.remove(p)
